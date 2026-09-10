@@ -23,9 +23,13 @@ export default defineConfig({
       output: {
         // Редактор и CRDT — самые тяжёлые части. Отдельными файлами они
         // кешируются у пользователя и не тянутся заново при каждой правке кода.
+        // Здесь только пакеты с корневым экспортом. @tiptap/pm и y-protocols
+        // состоят из подпутей (@tiptap/pm/state, y-protocols/awareness),
+        // корневой точки входа у них нет — сборка на них падает. В общий
+        // чанк они всё равно попадут вместе с тем, что их импортирует.
         manualChunks: {
-          editor: ['@tiptap/react', '@tiptap/starter-kit', '@tiptap/pm'],
-          crdt: ['yjs', 'y-prosemirror', 'y-protocols', 'y-indexeddb'],
+          editor: ['@tiptap/react', '@tiptap/starter-kit'],
+          crdt: ['yjs', 'y-prosemirror', 'y-indexeddb'],
         },
       },
     },

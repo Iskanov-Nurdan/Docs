@@ -47,6 +47,9 @@ services:
              python manage.py collectstatic --noinput &&
              daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     volumes:
+      # Код с хоста: makemigrations пишет файлы в репозиторий, а не внутрь
+      # контейнера, и правки не требуют пересборки образа.
+      - ./backend:/app
       - static_files:/app/staticfiles
       - media_files:/app/mediafiles
     depends_on:
@@ -72,6 +75,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     command: celery -A config worker --loglevel=info --concurrency=2
     volumes:
+      - ./backend:/app
       - media_files:/app/mediafiles
     depends_on:
       db: {condition: service_healthy}
@@ -89,6 +93,8 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
     command: celery -A config beat --loglevel=info
+    volumes:
+      - ./backend:/app
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}

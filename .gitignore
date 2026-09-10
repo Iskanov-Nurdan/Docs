@@ -59,6 +59,11 @@ pnpm-debug.log*
 .eslintcache
 *.tsbuildinfo
 
+# ---------- Celery ----------
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
 # ---------- Docker ----------
 docker-compose.override.yml
 .docker/
