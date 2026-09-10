@@ -1,78 +1,136 @@
-# Имя проекта задано явно: имя папки с кириллицей Compose использовать не может.
-name: delivery-tracker
+# Локальная разработка: docker compose up -d --build
+# Боевой контур — docker-compose.prod.yml.
+name: docs
 
 services:
   db:
     image: postgres:16.4-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-delivery}
-      POSTGRES_USER: ${POSTGRES_USER:-delivery}
+      POSTGRES_DB: ${POSTGRES_DB:-docs}
+      POSTGRES_USER: ${POSTGRES_USER:-docs}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD обязателен}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-delivery} -d ${POSTGRES_DB:-delivery}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docs} -d ${POSTGRES_DB:-docs}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - backend
+    networks: [backend]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # Правки в Redis только транзитные (присутствие, кеш, очередь),
+    # поэтому сохранение на диск отключено — так он быстрее.
+    command: redis-server --save "" --appendonly no --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
 
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    env_file:
-      - ./.env
+    env_file: [./.env]
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-delivery}
-      POSTGRES_USER: ${POSTGRES_USER:-delivery}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
     command: >
       sh -c "python manage.py migrate --noinput &&
              python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60 --access-logfile -"
+             daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     volumes:
       - static_files:/app/staticfiles
+      - media_files:/app/mediafiles
     depends_on:
-      db:
-        condition: service_healthy
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
-    networks:
-      - backend
+      start_period: 40s
+    networks: [backend]
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: [./.env]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A config worker --loglevel=info --concurrency=2
+    volumes:
+      - media_files:/app/mediafiles
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+
+  beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: [./.env]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A config beat --loglevel=info
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/ws}
+    volumes:
+      - ./frontend:/app
+      # Слой с зависимостями остаётся контейнерным: они собраны под Linux,
+      # и подмена их из системы разработчика ломает сборку.
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    networks: [backend]
 
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_PORT:-8080}:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/proxy_params_custom.conf:/etc/nginx/proxy_params_custom.conf:ro
-      - ./frontend:/usr/share/nginx/html:ro
       - static_files:/usr/share/nginx/static:ro
+      - media_files:/usr/share/nginx/media:ro
     depends_on:
-      api:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks:
-      - backend
+      - api
+      - frontend
+    networks: [backend]
 
 volumes:
   postgres_data:
   static_files:
+  media_files:
 
 networks:
   backend:

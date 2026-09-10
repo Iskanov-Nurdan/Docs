@@ -1,30 +1,24 @@
-"""Маршруты проекта."""
+"""Маршруты HTTP-части. Realtime живёт в config/routing.py."""
 from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
-from django.views.generic import RedirectView
 
 from apps.core.views import HealthView
-
-api_patterns = [
-    path("", include("apps.accounts.urls")),
-    path("", include("apps.points.urls")),
-    path("", include("apps.deliveries.urls")),
-    path("", include("apps.expenses.urls")),
-    path("", include("apps.reports.urls")),
-    path("", include("apps.core.urls")),
-]
 
 urlpatterns = [
     path("django-admin/", admin.site.urls),
     path("health/", HealthView.as_view(), name="health"),
-    path("api/", include(api_patterns)),
+    path("api/", include("apps.users.urls")),
+    path("api/", include("apps.documents.urls")),
+    path("api/", include("apps.permissions.urls")),
+    path("api/", include("apps.comments.urls")),
+    path("api/", include("apps.versions.urls")),
+    path("api/", include("apps.notifications.urls")),
+    path("api/", include("apps.doc_templates.urls")),
+    path("api/", include("apps.files.urls")),
+    path("api/", include("apps.publishing.urls")),
 ]
 
 if settings.DEBUG:
-    # В режиме разработки открываем фронтенд по корневому адресу.
-    urlpatterns += [path("", RedirectView.as_view(url="/static/index.html", permanent=False))]
-
-admin.site.site_header = "ALI trade"
-admin.site.site_title = "ALI trade"
-admin.site.index_title = "Администрирование"
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
