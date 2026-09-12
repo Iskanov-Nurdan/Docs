@@ -107,8 +107,8 @@ services:
       target: dev
     restart: unless-stopped
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
-      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/ws}
+      VITE_API_URL: ${VITE_API_URL:-/api}
+      VITE_WS_URL: ${VITE_WS_URL:-}
     volumes:
       - ./frontend:/app
       # Слой с зависимостями остаётся контейнерным: они собраны под Linux,

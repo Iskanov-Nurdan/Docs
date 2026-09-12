@@ -1,29 +1,10 @@
-# Нормализация переводов строк: в репозитории всегда LF.
-* text=auto eol=lf
-
-# Исполняется в Linux-контейнерах — только LF.
-*.sh            text eol=lf
-Dockerfile      text eol=lf
-*.conf          text eol=lf
-*.yml           text eol=lf
-*.yaml          text eol=lf
-
-# Windows-скрипты — наоборот.
-*.bat           text eol=crlf
-*.ps1           text eol=crlf
-
-# Бинарники не трогать.
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.gif binary
-*.ico binary
-*.webp binary
-*.pdf binary
-*.woff binary
-*.woff2 binary
-*.ttf binary
-*.docx binary
-*.odt binary
-
-package-lock.json linguist-generated=true -diff
+# Скрипты и конфигурация сервера всегда с переводом строки Unix.
+# Иначе git на Windows положит в них CR, и на Linux скрипт не запустится:
+# ядро ищет интерпретатор «/usr/bin/env bash\r» и не находит.
+*.sh text eol=lf
+*.conf text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.env.example text eol=lf
+.env.prod.example text eol=lf

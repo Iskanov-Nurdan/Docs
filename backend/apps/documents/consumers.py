@@ -14,6 +14,7 @@ import logging
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.conf import settings
 from django.utils import timezone
 
 from apps.documents.models import Document, DocumentUpdate
@@ -25,6 +26,38 @@ logger = logging.getLogger(__name__)
 # Приращение больше этого размера — почти наверняка не правка человека,
 # а попытка забить память сервера.
 MAX_UPDATE_BYTES = 1024 * 1024
+
+
+# Сколько секунд после подключения пустой снимок считается недоразумением,
+# а не осознанной очисткой. Клиент за это время успевает получить состояние
+# с сервера и, если надо, засеять книгу из содержимого базы.
+EMPTY_SNAPSHOT_GRACE_SECONDS = 15
+
+
+def _cell_count(content) -> int:
+    """Сколько заполненных ячеек в книге. Чужой формат считается пустым.
+
+    Считаются именно заполненные. Прежняя версия брала len(cells), и снимок
+    с одной пустой ячейкой обходил защиту, затирая книгу целиком.
+    """
+    if not isinstance(content, dict):
+        return 0
+
+    total = 0
+    for sheet in content.get("sheets") or []:
+        if not isinstance(sheet, dict):
+            continue
+        cells = sheet.get("cells")
+        if not isinstance(cells, dict):
+            continue
+        for cell in cells.values():
+            if isinstance(cell, dict):
+                filled = cell.get("value") not in (None, "") or cell.get("display") not in (None, "")
+            else:
+                filled = cell not in (None, "")
+            if filled:
+                total += 1
+    return total
 
 
 class DocumentConsumer(AsyncWebsocketConsumer):
@@ -53,6 +86,7 @@ class DocumentConsumer(AsyncWebsocketConsumer):
             return
 
         self.document = document
+        self.connected_at = timezone.now()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
@@ -87,6 +121,16 @@ class DocumentConsumer(AsyncWebsocketConsumer):
             await self._handle_update(bytes_data)
             return
         if text_data is None:
+            return
+
+        # Размер проверяется до разбора: json.loads разворачивает кадр целиком,
+        # и двухсотмегабайтный снимок съедал память ещё до первой проверки.
+        # У nginx client_max_body_size на кадры WebSocket не распространяется.
+        if len(text_data) > settings.MAX_DOCUMENT_BYTES:
+            logger.warning(
+                "Сообщение документа %s на %s байт отброшено: предел %s",
+                self.document_id, len(text_data), settings.MAX_DOCUMENT_BYTES,
+            )
             return
 
         try:
@@ -148,10 +192,23 @@ class DocumentConsumer(AsyncWebsocketConsumer):
         if not self._can_edit():
             return
 
+        from rest_framework.exceptions import ValidationError
+
+        from apps.documents.serializers import DocumentUpdateSerializer
+
         content = message.get("content")
         raw_state = message.get("state")
         if not isinstance(content, dict) or not isinstance(raw_state, str):
             logger.warning("Неполный снимок документа %s отклонён", self.document_id)
+            return
+
+        # Тот же разбор, что и у REST. Раньше снимок не проверялся вовсе, и
+        # книга неверной формы доезжала до переиндексации, роняя соединение.
+        try:
+            DocumentUpdateSerializer().validate_content(content)
+        except ValidationError as error:
+            logger.warning("Снимок документа %s не прошёл проверку: %s",
+                           self.document_id, error.detail)
             return
 
         try:
@@ -246,6 +303,32 @@ class DocumentConsumer(AsyncWebsocketConsumer):
         if document is None:
             return
 
+        # Пустой снимок поверх заполненной книги — почти всегда признак того,
+        # что клиент не успел получить содержимое и прислал то, что есть у него.
+        # Так документ, созданный из шаблона, терял всё содержимое сразу после
+        # открытия.
+        #
+        # Но «не первым же снимком» надо было ещё и проверять: прежнее условие
+        # не смотрело ни на время, ни на номер снимка и отклоняло очистку
+        # всегда, так что таблицу нельзя было очистить в принципе. Считаем
+        # подозрительными только первые секунды соединения.
+        if _cell_count(content) == 0 and _cell_count(document.content) > 0:
+            age = (timezone.now() - self.connected_at).total_seconds()
+            if age < EMPTY_SNAPSHOT_GRACE_SECONDS:
+                logger.warning(
+                    "Пустой снимок документа %s отклонён: соединению %.1f с, в базе %s ячеек",
+                    self.document_id, age, _cell_count(document.content),
+                )
+                return
+            logger.info("Документ %s очищен пользователем %s",
+                        self.document_id, self.user.email)
+
+        # Момент, на который построен снимок. Читается до записи: save_content
+        # меняет last_edited_at у этого же объекта, и прежний код сравнивал
+        # приращения с временем уже после сохранения — то есть удалял и те
+        # правки соседа, которые пришли, пока снимок ехал по сети.
+        built_before = document.last_edited_at
+
         # Снимок и очистка журнала — одной транзакцией: сбой посередине
         # оставил бы документ без части правок.
         with transaction.atomic():
@@ -254,5 +337,5 @@ class DocumentConsumer(AsyncWebsocketConsumer):
             )
             # Приращения, пришедшие уже после снимка, обязаны уцелеть.
             DocumentUpdate.objects.filter(
-                document_id=self.document_id, created_at__lte=document.last_edited_at
+                document_id=self.document_id, created_at__lte=built_before
             ).delete()

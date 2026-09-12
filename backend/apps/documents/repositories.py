@@ -29,14 +29,27 @@ class DocumentRepository:
     def starred(self, user) -> QuerySet[Document]:
         return self.active(user).filter(starred_by__user=user)
 
+    def shared_with(self, user) -> QuerySet[Document]:
+        """Чужие документы, к которым выдан доступ."""
+        return self.active(user).exclude(owner=user)
+
     def by_id(self, document_id) -> Document | None:
         return self.base_queryset().filter(id=document_id).first()
 
     def search(self, user, query: str) -> QuerySet[Document]:
-        """Полнотекстовый поиск по названию и содержимому.
+        """Поиск по названию и содержимому.
 
-        Ищем через search_vector: он обновляется при сохранении документа,
-        поэтому запрос не разбирает JSON содержимого на каждый ввод символа.
+        Работают два способа сразу, и это осознанно:
+
+        * полнотекстовый индекс — по словам с учётом морфологии («договоры»
+          находятся по «договор»). Он же даёт осмысленный порядок выдачи;
+        * поиск по фрагменту — по части слова и по части номера. Полнотекстовый
+          индекс разбивает текст на слова целиком, поэтому «4501» он найдёт,
+          а «450» или «4501-А» — уже нет. Для накладных, счетов и артикулов
+          это главный способ искать, поэтому обходиться одним индексом нельзя.
+
+        Фрагмент ищется по триграммному индексу (миграция 0004), а не
+        последовательным чтением таблицы.
         """
         query = (query or "").strip()
         documents = self.active(user)
@@ -45,7 +58,11 @@ class DocumentRepository:
 
         search_query = SearchQuery(query, config="russian")
         return (
-            documents.filter(Q(search_vector=search_query) | Q(title__icontains=query))
+            documents.filter(
+                Q(search_vector=search_query)
+                | Q(title__icontains=query)
+                | Q(plain_text__icontains=query)
+            )
             .annotate(rank=SearchRank("search_vector", search_query))
             .order_by("-rank", "-last_edited_at")
         )

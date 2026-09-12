@@ -26,28 +26,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "email", "first_name", "last_name", "display_name", "avatar",
                   "language", "theme", "email_notifications", "editor_settings",
-                  "cursor_color", "email_confirmed", "is_staff", "created_at")
-        read_only_fields = ("id", "email", "email_confirmed", "is_staff", "created_at")
-
-
-class RegisterSerializer(serializers.Serializer):
-    email = serializers.EmailField(max_length=254)
-    password = serializers.CharField(write_only=True, max_length=128)
-    first_name = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
-    last_name = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
-
-    def validate_email(self, value: str) -> str:
-        return value.strip().lower()
-
-    def validate_password(self, value: str) -> str:
-        validate_password(value)
-        return value
-
-    def validate_first_name(self, value: str) -> str:
-        return plain_text(value)
-
-    def validate_last_name(self, value: str) -> str:
-        return plain_text(value)
+                  "cursor_color", "email_confirmed", "is_staff", "is_superuser", "created_at")
+        read_only_fields = ("id", "email", "email_confirmed", "is_staff", "is_superuser",
+                            "created_at")
 
 
 class LoginSerializer(serializers.Serializer):

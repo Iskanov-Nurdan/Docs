@@ -1,6 +1,6 @@
 /** Состояние текущего пользователя. */
 import { create } from 'zustand'
-import { api, tokens } from '@/api'
+import { api, onUnauthorized, tokens } from '@/api'
 import type { User } from '@/types'
 
 type AuthState = {
@@ -8,7 +8,6 @@ type AuthState = {
   loading: boolean
   initialized: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (data: { email: string; password: string; first_name?: string; last_name?: string }) => Promise<void>
   logout: () => Promise<void>
   restore: () => Promise<void>
   patchUser: (patch: Partial<User>) => void
@@ -23,17 +22,6 @@ export const useAuth = create<AuthState>((set) => ({
     set({ loading: true })
     try {
       const data = await api.login({ email, password })
-      tokens.set(data.access, data.refresh)
-      set({ user: data.user, initialized: true })
-    } finally {
-      set({ loading: false })
-    }
-  },
-
-  async register(payload) {
-    set({ loading: true })
-    try {
-      const data = await api.register(payload)
       tokens.set(data.access, data.refresh)
       set({ user: data.user, initialized: true })
     } finally {
@@ -74,3 +62,16 @@ export const useAuth = create<AuthState>((set) => ({
     set((state) => (state.user ? { user: { ...state.user, ...patch } } : state))
   },
 }))
+
+/**
+ * Сессия закончилась на стороне клиента — вычищаем пользователя.
+ *
+ * Без этого протухший refresh стирал токены, но `user` в хранилище оставался,
+ * и Protected продолжал пускать внутрь: человек ходил по приложению, где
+ * каждый запрос отвечает 401, и никуда его при этом не выбрасывало.
+ */
+onUnauthorized(() => {
+  if (useAuth.getState().user === null) return
+  tokens.clear()
+  useAuth.setState({ user: null, initialized: true, loading: false })
+})

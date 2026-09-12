@@ -1,90 +1,90 @@
-"""Разбор структуры документа ProseMirror.
+"""Разбор содержимого книги.
 
-Документ хранится деревом узлов, а не строкой HTML. Здесь — операции, которые
-нужны серверу: обычный текст для поиска и оглавление для навигации.
+Документ — это листы с ячейками. Здесь то, что нужно серверу и чего нет
+в самой книге: обычный текст для поиска и подсчёт заполненного.
 """
 from typing import Any
-
-# Узлы, после которых текст продолжается с новой строки: иначе заголовок
-# склеится со следующим абзацем и поиск найдёт несуществующую фразу.
-BLOCK_NODES = {
-    "paragraph", "heading", "listItem", "blockquote", "codeBlock",
-    "tableRow", "tableCell", "tableHeader", "taskItem",
-}
 
 MAX_TEXT_LENGTH = 1_000_000
 
 
 def extract_plain_text(content: Any, limit: int = MAX_TEXT_LENGTH) -> str:
-    """Собирает читаемый текст из дерева узлов."""
+    """Текст книги для поиска: названия листов и значения ячеек.
+
+    В поиск идёт и введённое, и посчитанное: номер счёта человек ищет как
+    «4501», а в ячейке может лежать формула, дающая это число. Оба значения
+    приходят с клиента — сервер формулы не считает.
+    """
+    if not isinstance(content, dict):
+        return ""
+
     parts: list[str] = []
-    _walk_text(content, parts, limit)
-    text = "".join(parts)
-    return text[:limit].strip()
+    length = 0
 
+    for sheet in content.get("sheets") or []:
+        if not isinstance(sheet, dict):
+            continue
 
-def _walk_text(node: Any, parts: list[str], limit: int) -> None:
-    if not isinstance(node, dict):
-        return
-    if sum(len(part) for part in parts) >= limit:
-        return
+        name = str(sheet.get("name") or "")
+        if name:
+            parts.append(name)
+            length += len(name) + 1
 
-    node_type = node.get("type")
+        cells = sheet.get("cells")
+        # Содержимое могло попасть в базу до того, как разбор стал строгим:
+        # падать на нём нельзя — переиндексация идёт внутри транзакции записи.
+        if not isinstance(cells, dict):
+            continue
 
-    if node_type == "text":
-        parts.append(node.get("text", ""))
-        return
+        for cell in cells.values():
+            if length >= limit:
+                break
 
-    # Смарт-чипы и упоминания несут подпись в атрибутах, а не в тексте.
-    if node_type in {"mention", "smartChip", "dateChip"}:
-        label = (node.get("attrs") or {}).get("label", "")
-        if label:
-            parts.append(str(label))
-        return
+            if isinstance(cell, dict):
+                values = [cell.get("value"), cell.get("display")]
+            else:
+                values = [cell]
 
-    for child in node.get("content") or []:
-        _walk_text(child, parts, limit)
+            for value in values:
+                if value in (None, ""):
+                    continue
+                text = str(value)
+                # Формула и её результат совпадают у обычного числа —
+                # второй раз то же самое в индекс не кладём.
+                if parts and parts[-1] == text:
+                    continue
+                parts.append(text)
+                length += len(text) + 1
 
-    if node_type in BLOCK_NODES:
-        parts.append("\n")
-
-
-def extract_headings(content: Any) -> list[dict]:
-    """Оглавление: уровень, текст и якорь каждого заголовка."""
-    headings: list[dict] = []
-    _walk_headings(content, headings)
-    return headings
-
-
-def _walk_headings(node: Any, headings: list[dict]) -> None:
-    if not isinstance(node, dict):
-        return
-
-    if node.get("type") == "heading":
-        attrs = node.get("attrs") or {}
-        text_parts: list[str] = []
-        _walk_text(node, text_parts, MAX_TEXT_LENGTH)
-        text = "".join(text_parts).strip()
-        if text:
-            headings.append({
-                "level": attrs.get("level", 1),
-                "text": text,
-                # Якорь задаётся редактором при вводе заголовка; без него
-                # ссылка на раздел ломалась бы при изменении текста.
-                "anchor": attrs.get("id") or "",
-            })
-
-    for child in node.get("content") or []:
-        _walk_headings(child, headings)
+    return "\n".join(parts)[:limit].strip()
 
 
 def count_stats(content: Any) -> dict:
-    """Слова, знаки и абзацы — показываются в меню «Инструменты»."""
+    """Сводка по книге — показывается в свойствах документа."""
+    sheets = content.get("sheets") if isinstance(content, dict) else None
+    sheets = sheets if isinstance(sheets, list) else []
+
+    filled = 0
+    formulas = 0
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        cells = sheet.get("cells")
+        if not isinstance(cells, dict):
+            continue
+
+        for cell in cells.values():
+            value = cell.get("value") if isinstance(cell, dict) else cell
+            if value in (None, ""):
+                continue
+            filled += 1
+            if str(value).startswith("="):
+                formulas += 1
+
     text = extract_plain_text(content)
-    words = [word for word in text.split() if word]
     return {
+        "sheets": len(sheets),
+        "cells": filled,
+        "formulas": formulas,
         "characters": len(text),
-        "characters_no_spaces": len(text.replace(" ", "").replace("\n", "")),
-        "words": len(words),
-        "paragraphs": len([line for line in text.split("\n") if line.strip()]),
     }

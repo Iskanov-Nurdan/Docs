@@ -1,5 +1,6 @@
 from django.urls import path
 
+from apps.users.admin_api import AdminSummaryView, AdminUserDetailView, AdminUsersView
 from apps.users.views import (
     ChangePasswordView,
     ConfirmEmailView,
@@ -8,13 +9,11 @@ from apps.users.views import (
     MeView,
     PasswordResetConfirmView,
     PasswordResetRequestView,
-    RegisterView,
     SessionRefreshView,
     UserSearchView,
 )
 
 urlpatterns = [
-    path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/login/", LoginView.as_view(), name="login"),
     path("auth/logout/", LogoutView.as_view(), name="logout"),
     path("auth/refresh/", SessionRefreshView.as_view(), name="token-refresh"),
@@ -25,4 +24,9 @@ urlpatterns = [
     path("auth/password/change/", ChangePasswordView.as_view(), name="password-change"),
     path("users/me/", MeView.as_view(), name="users-me"),
     path("users/search/", UserSearchView.as_view(), name="users-search"),
+
+    # Административная часть: доступна только сотрудникам (is_staff).
+    path("admin/users/", AdminUsersView.as_view(), name="admin-users"),
+    path("admin/users/<int:user_id>/", AdminUserDetailView.as_view(), name="admin-user-detail"),
+    path("admin/summary/", AdminSummaryView.as_view(), name="admin-summary"),
 ]

@@ -1,6 +1,7 @@
 """HTTP-слой документов: разбор запроса, проверка прав, вызов сервиса."""
 import logging
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -30,7 +31,13 @@ class DocumentViewSet(viewsets.ViewSet):
     """Документы. Доступ к каждому проверяется через AccessService."""
 
     def _get_document(self, pk) -> Document:
-        document = DocumentRepository().by_id(pk)
+        try:
+            document = DocumentRepository().by_id(pk)
+        except (DjangoValidationError, ValueError):
+            # Адрес вида /api/documents/abc/ — не идентификатор. Это ошибка
+            # запроса, а не сбой сервера, поэтому отвечаем «не найден».
+            raise NotFoundError("Документ не найден.") from None
+
         if document is None:
             # Тот же ответ, что и при отсутствии прав: существование чужих
             # документов не должно определяться перебором адресов.
@@ -48,6 +55,8 @@ class DocumentViewSet(viewsets.ViewSet):
             queryset = repository.trashed(request.user)
         elif scope == "starred":
             queryset = repository.starred(request.user)
+        elif scope == "shared":
+            queryset = repository.shared_with(request.user)
         elif scope == "search":
             queryset = repository.search(request.user, request.query_params.get("q", ""))
         else:
@@ -70,7 +79,16 @@ class DocumentViewSet(viewsets.ViewSet):
 
         paginator = DefaultPagination()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = DocumentListSerializer(page, many=True, context={"request": request})
+        # Без ролей карточка не знает, что человеку позволено, и прячет
+        # переименование, перемещение и корзину даже у владельца.
+        serializer = DocumentListSerializer(
+            page, many=True,
+            context={
+                "request": request,
+                "query": request.query_params.get("q", ""),
+                "roles": AccessService().roles_for(user=request.user, documents=page),
+            },
+        )
         return paginator.get_paginated_response(serializer.data)
 
     def create(self, request):
@@ -119,7 +137,11 @@ class DocumentViewSet(viewsets.ViewSet):
             user=request.user, document=document, data=serializer.validated_data,
             ip=client_ip(request),
         )
-        return Response(DocumentDetailSerializer(document, context={"role": Role.OWNER}).data)
+        # Роль — настоящая, а не OWNER: править документ может и редактор,
+        # а получив в ответ «owner», интерфейс показывал ему «Поделиться»
+        # и «Удалить» — кнопки, на которые сервер отвечает отказом.
+        role = AccessService().role_for(user=request.user, document=document)
+        return Response(DocumentDetailSerializer(document, context={"role": role}).data)
 
     def destroy(self, request, pk=None):
         document = self._get_document(pk)
@@ -239,5 +261,13 @@ class DocumentSearchView(APIView):
 
     def get(self, request):
         query = request.query_params.get("q", "")
-        documents = DocumentRepository().search(request.user, query)[:50]
-        return Response(DocumentListSerializer(documents, many=True).data)
+        documents = list(DocumentRepository().search(request.user, query)[:50])
+        return Response(
+            DocumentListSerializer(
+                documents, many=True,
+                context={
+                    "query": query,
+                    "roles": AccessService().roles_for(user=request.user, documents=documents),
+                },
+            ).data
+        )

@@ -53,6 +53,32 @@ class AccessService:
             return None
         return Role(link.role)
 
+    def roles_for(self, *, user, documents) -> dict:
+        """Роли сразу для списка документов: карточкам нужно знать, что можно.
+
+        Отдельный `role_for` на каждую карточку — это запрос на строку списка.
+        Здесь права забираются одним запросом, а владение определяется без
+        запроса вовсе: `owner_id` уже загружен вместе с документом.
+        """
+        if not user or not user.is_authenticated:
+            return {}
+
+        roles: dict = {}
+        rest: list = []
+        for document in documents:
+            if document.owner_id == user.id:
+                roles[document.id] = Role.OWNER
+            else:
+                rest.append(document.id)
+
+        if rest:
+            granted = DocumentPermission.objects.filter(
+                user=user, document_id__in=rest
+            ).values_list("document_id", "role")
+            for document_id, role in granted:
+                roles[document_id] = Role(role)
+        return roles
+
     def require(self, *, user, document: Document, minimum: Role,
                 link_token: str | None = None) -> Role:
         """Возвращает роль или выбрасывает ошибку. Единственная точка отказа."""

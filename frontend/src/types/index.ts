@@ -10,6 +10,26 @@ export type Paginated<T> = {
 
 export type Role = 'owner' | 'editor' | 'commenter' | 'viewer'
 
+/** Ячейка в сохранённом снимке книги. */
+export type SheetCellSnapshot = {
+  /** Введённое человеком: «120» или «=СУММ(B2:B10)». */
+  value: string
+  /** Посчитанное значение в том виде, в каком его видно в таблице. */
+  display?: string
+}
+
+export type SheetSnapshot = {
+  id: string
+  name: string
+  /** Только заполненные ячейки: пустую сетку хранить незачем. */
+  cells: Record<string, SheetCellSnapshot>
+}
+
+export type SheetContent = {
+  kind: 'sheet'
+  sheets: SheetSnapshot[]
+}
+
 /** Режим работы с документом. Определяет, что редактор разрешает делать. */
 export type EditorMode = 'editing' | 'suggesting' | 'viewing'
 
@@ -27,8 +47,39 @@ export type User = {
   email_notifications?: boolean
   editor_settings?: Record<string, unknown>
   email_confirmed?: boolean
+  /** Доступ в административную часть. */
   is_staff?: boolean
+  /** Главный админ: назначает и снимает администраторов. */
+  is_superuser?: boolean
   created_at?: string
+}
+
+/** Уровень прав в системе. Не путать с ролью в документе. */
+export type AdminRole = 'owner' | 'admin' | 'member'
+
+export type AdminUser = {
+  id: number
+  email: string
+  display_name: string
+  first_name: string
+  last_name: string
+  avatar: string | null
+  role: AdminRole
+  is_active: boolean
+  is_staff: boolean
+  is_superuser: boolean
+  email_confirmed: boolean
+  documents_count: number
+  created_at: string
+  last_login: string | null
+}
+
+export type AdminSummary = {
+  users: number
+  active_users: number
+  admins: number
+  documents: number
+  trashed: number
 }
 
 export type Folder = {
@@ -46,6 +97,8 @@ export type DocumentSummary = {
   owner: User
   folder: string | null
   preview: string
+  /** Фрагмент вокруг найденного — приходит только в ответе на поиск. */
+  snippet?: string
   is_starred: boolean
   is_published: boolean
   last_edited_by: User | null
@@ -56,29 +109,19 @@ export type DocumentSummary = {
   my_role: Role | null
 }
 
-export type Heading = { level: number; text: string; anchor: string }
-
+/** Сводка по книге: сколько листов, заполненных ячеек и формул. */
 export type DocumentStats = {
+  sheets: number
+  cells: number
+  formulas: number
   characters: number
-  characters_no_spaces: number
-  words: number
-  paragraphs: number
 }
 
 export type Document = DocumentSummary & {
   content: Record<string, unknown>
-  document_mode: 'pages' | 'pageless'
-  page_size: 'a4' | 'letter' | 'legal'
-  orientation: 'portrait' | 'landscape'
-  margin_top: number
-  margin_bottom: number
-  margin_left: number
-  margin_right: number
-  page_color: string
   allow_download: boolean
   allow_copy: boolean
   allow_print: boolean
-  headings: Heading[]
   stats: DocumentStats
 }
 
@@ -101,47 +144,6 @@ export type ShareLink = {
   is_active: boolean
 }
 
-export type CommentReply = {
-  id: string
-  user: User
-  content: string
-  created_at: string
-  updated_at: string
-}
-
-export type Comment = {
-  id: string
-  user: User
-  content: string
-  selection_data: Record<string, unknown>
-  quoted_text: string
-  is_resolved: boolean
-  resolved_by: User | null
-  resolved_at: string | null
-  assignee: User | null
-  is_completed: boolean
-  replies: CommentReply[]
-  reactions: { emoji: string; count: number }[]
-  created_at: string
-  updated_at: string
-}
-
-export type Suggestion = {
-  id: string
-  user: User
-  operation: 'insert' | 'delete' | 'replace' | 'format'
-  operation_display: string
-  position: Record<string, unknown>
-  content: Record<string, unknown>
-  original_text: string
-  suggested_text: string
-  status: 'pending' | 'accepted' | 'rejected'
-  status_display: string
-  resolved_by: User | null
-  resolved_at: string | null
-  created_at: string
-}
-
 export type Version = {
   id: string
   version_number: number
@@ -159,6 +161,8 @@ export type Template = {
   category_display: string
   preview_image: string | null
   is_building_block: boolean
+  /** Заготовка, которую человек сохранил себе: видна только ему. */
+  is_personal: boolean
 }
 
 export type Notification = {
@@ -172,6 +176,19 @@ export type Notification = {
   message: string
   is_read: boolean
   created_at: string
+}
+
+/** Публикация документа в вебе. Пока не публиковали — приходит только published: false. */
+export type Publication = {
+  published: boolean
+  id?: string
+  public_id?: string
+  title?: string
+  is_active?: boolean
+  auto_update?: boolean
+  views_count?: number
+  created_at?: string
+  updated_at?: string
 }
 
 /** Участник, который сейчас в документе. */

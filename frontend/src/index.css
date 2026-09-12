@@ -6,20 +6,23 @@
   /* Палитра задаётся числами, чтобы Tailwind мог подмешивать прозрачность. */
   :root {
     --surface: 255 255 255;
-    --surface-muted: 244 244 242;
-    --ink: 19 26 36;
-    --ink-muted: 110 120 133;
-    --accent: 22 50 95;
-    --hairline: 224 224 220;
+    /* Фон рабочей области белый. Разделение держится на линиях, а не на
+       заливке, поэтому линии чуть заметнее: без них на белом фоне белые
+       карточки слились бы в одно пятно. */
+    --surface-muted: 250 251 252;
+    --ink: 24 32 44;
+    --ink-muted: 98 112 130;
+    --accent: 42 122 214;
+    --hairline: 214 222 232;
   }
 
   :root.dark {
-    --surface: 24 26 30;
-    --surface-muted: 17 18 21;
-    --ink: 232 234 237;
-    --ink-muted: 148 155 165;
-    --accent: 122 162 247;
-    --hairline: 48 51 57;
+    --surface: 22 27 34;
+    --surface-muted: 15 19 25;
+    --ink: 231 236 243;
+    --ink-muted: 142 154 170;
+    --accent: 116 173 246;
+    --hairline: 45 54 66;
   }
 
   html {
@@ -30,116 +33,189 @@
     color-scheme: dark;
   }
 
+  html {
+    /* Альбомная ориентация на iPhone иначе раздувает шрифты по своему
+       усмотрению, и вёрстка, выверенная в портретной, разъезжается. */
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     @apply bg-surface text-ink antialiased;
     margin: 0;
     font-family: theme('fontFamily.sans');
+    /* Ничего не должно уезжать вбок: горизонтальная прокрутка страницы на
+       телефоне выглядит поломкой, даже когда за край уходит один пиксель. */
+    overflow-x: hidden;
+  }
+
+  /* Касание срабатывает сразу: браузер иначе ждёт треть секунды, не будет ли
+     второго нажатия для увеличения. Заодно пропадает зум по двойному тапу —
+     в таблице он мешает, там двойное касание открывает ячейку на правку. */
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  summary,
+  [role='button'],
+  [role='menuitem'],
+  [role='option'] {
+    touch-action: manipulation;
+  }
+
+  /**
+   * На телефоне поле мельче 16 пикселей заставляет Safari увеличить страницу
+   * при касании — и обратно она уже не уменьшается. Поэтому на узких экранах
+   * поля крупнее: это и пальцу удобнее.
+   *
+   * Ячейка таблицы — исключение: строка высотой 24 пикселя не вмещает такой
+   * шрифт, а увеличение там и не грозит, двойной тап перехвачен.
+   */
+  @media (max-width: 640px) {
+    input:not([type='color']):not([type='checkbox']):not([type='radio']):not(.cell-input),
+    select,
+    textarea {
+      font-size: 16px;
+    }
   }
 
   /* Видимый фокус нужен тем, кто ходит по интерфейсу с клавиатуры. */
   :focus-visible {
     outline: 2px solid rgb(var(--accent));
     outline-offset: 2px;
+    /* Обводка появляется мгновенно: задержка на фокусе читается как подвисание. */
+    transition: none;
+  }
+
+  /* Общая плавность интерфейса.
+     Переходят только цвет, тень и рамка — то, что меняется при наведении и
+     нажатии. Размеры и положение сюда не входят: анимировать их на каждом
+     элементе значит платить перерасчётом раскладки за каждое движение мыши. */
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role='button'],
+  [role='menuitem'] {
+    transition:
+      background-color 140ms ease,
+      border-color 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease,
+      opacity 140ms ease;
+  }
+
+  /* Нажатие отзывается сразу — без этого касание на телефоне кажется
+     несработавшим, пока идёт запрос к серверу. */
+  button:not(:disabled):active,
+  [role='button']:not([aria-disabled='true']):active {
+    transform: scale(0.98);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Системная настройка «меньше движения» — не пожелание, а требование:
+     анимации вызывают дурноту у части людей. Отключаем всё разом. */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      transform: none !important;
+    }
   }
 }
 
 @layer components {
-  /* Оформление самого документа: гарнитура с засечками — как в печатном тексте. */
-  .prose-editor {
-    @apply font-serif text-[11pt] leading-relaxed text-gray-900;
+  /* Полоса прокрутки у панели инструментов и вкладок листов: сама прокрутка
+     нужна, а вот полоса под пальцем съедает и без того низкую панель. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 
-  .prose-editor h1 {
-    @apply mb-3 mt-6 text-[20pt] font-semibold;
-  }
-  .prose-editor h2 {
-    @apply mb-2 mt-5 text-[16pt] font-semibold;
-  }
-  .prose-editor h3 {
-    @apply mb-2 mt-4 text-[14pt] font-semibold;
-  }
-  .prose-editor h4,
-  .prose-editor h5,
-  .prose-editor h6 {
-    @apply mb-2 mt-3 text-[12pt] font-semibold;
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
-  .prose-editor p {
-    @apply mb-2;
+  /* Появление содержимого: короткий подъём с проявлением. Длиннее 200 мс
+     интерфейс начинает казаться медленным, короче 100 мс — дёрганым. */
+  .animate-rise {
+    animation: rise 180ms ease-out both;
   }
 
-  .prose-editor ul {
-    @apply mb-2 list-disc pl-6;
-  }
-  .prose-editor ol {
-    @apply mb-2 list-decimal pl-6;
+  /* Всплывающие слои — меню, подсказки, окна: растут из своей точки. */
+  .animate-pop {
+    animation: pop 140ms ease-out both;
   }
 
-  .prose-editor blockquote {
-    @apply my-3 border-l-4 border-gray-300 pl-4 italic text-gray-600;
+  .animate-fade {
+    animation: fade 160ms ease-out both;
   }
 
-  .prose-editor pre {
-    @apply my-3 overflow-x-auto rounded bg-gray-100 p-3 font-mono text-[10pt];
+  /* Панель разделов на телефоне выезжает от края экрана — так видно, откуда
+     она взялась и куда уйдёт. */
+  .animate-slide {
+    animation: slide 180ms ease-out both;
   }
 
-  .prose-editor a {
-    @apply text-blue-700 underline;
+  @keyframes slide {
+    from {
+      transform: translateX(-100%);
+    }
   }
 
-  .prose-editor img {
-    @apply my-2 h-auto max-w-full;
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
   }
 
-  .prose-editor table {
-    @apply my-3 w-full border-collapse;
-  }
-  .prose-editor td,
-  .prose-editor th {
-    @apply border border-gray-300 px-2 py-1 align-top;
-  }
-  .prose-editor th {
-    @apply bg-gray-50 font-semibold;
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
   }
 
-  /* Список задач: галочка рядом со строкой, а не поверх текста. */
-  .prose-editor ul[data-type='taskList'] {
-    @apply list-none pl-1;
-  }
-  .prose-editor ul[data-type='taskList'] li {
-    @apply flex items-start gap-2;
-  }
-  .prose-editor ul[data-type='taskList'] li > label {
-    @apply mt-1;
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
   }
 
-  /* Подсказка в пустом документе. */
-  .prose-editor p.is-editor-empty:first-child::before {
-    content: attr(data-placeholder);
-    @apply pointer-events-none float-left h-0 text-gray-400;
+  /* Заглушка на время загрузки: серая полоса вместо надписи «Загрузка…».
+     По ней сразу видно, что грузится список, а не одна строка, и переход
+     к данным не сдвигает раскладку. */
+  .skeleton {
+    @apply rounded bg-hairline/60;
+    animation: pulse 1.4s ease-in-out infinite;
   }
 
-  /* Курсор другого участника: полоса и подпись с его именем. */
-  .collaboration-cursor__caret {
-    @apply pointer-events-none relative mx-[-1px] border-l border-r border-black;
-    word-break: normal;
+  @keyframes pulse {
+    50% {
+      opacity: 0.45;
+    }
   }
 
-  .collaboration-cursor__label {
-    @apply absolute -top-[1.4em] left-[-1px] whitespace-nowrap rounded rounded-bl-none px-1 py-0.5 text-[11px] font-semibold text-white;
-    user-select: none;
-  }
 }
 
 @media print {
-  /* На печать уходит только сам документ. */
+  /* На печать уходит сама таблица: шапка приложения и панели на бумаге лишние. */
   header,
   [role='toolbar'],
   aside {
     display: none !important;
-  }
-
-  .prose-editor {
-    font-size: 12pt;
   }
 }

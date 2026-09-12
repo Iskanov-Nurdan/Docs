@@ -173,6 +173,16 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    # Сколько наших прокси стоит перед приложением. Значение обязательное:
+    # без него DRF берёт идентификатором для счётчика попыток весь заголовок
+    # X-Forwarded-For целиком, а его первое значение подставляет клиент.
+    # Новый заголовок на каждый запрос — и лимит на вход переставал работать
+    # вовсе: триста попыток подряд проходили при пределе десять в минуту.
+    "NUM_PROXIES": env_int("NUM_PROXIES", 1),
+    # Параметр ?format= у DRF выбирает рендерер и на неизвестном значении
+    # отвечает 404. У нас это параметр выгрузки (/export/?format=pdf),
+    # поэтому подбор рендерера через строку запроса отключён.
+    "URL_FORMAT_OVERRIDE": None,
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.OrderingFilter",
@@ -186,9 +196,8 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
     ),
     "DEFAULT_THROTTLE_RATES": {
-        # Подбор пароля и спам регистраций
+        # Подбор пароля
         "login": os.getenv("THROTTLE_LOGIN", "10/min"),
-        "register": os.getenv("THROTTLE_REGISTER", "5/hour"),
         "anon": os.getenv("THROTTLE_ANON", "60/min"),
         "export": os.getenv("THROTTLE_EXPORT", "20/hour"),
     },

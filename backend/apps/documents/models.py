@@ -5,34 +5,19 @@
 * `ydoc_state` — двоичное состояние Yjs. Оно авторитетно при совместном
   редактировании: только CRDT умеет слить правки двух людей в один участок
   текста, не потеряв ни одну из них.
-* `content` — тот же документ структурой ProseMirror (узлы, а не строка HTML).
-  Нужен всему, что работает без редактора: поиск, экспорт, печать, версии,
-  публикация. Пересобирается из состояния Yjs, а не правится напрямую.
+* `content` — та же книга обычным JSON: листы, ячейки, посчитанные значения.
+  Нужна всему, что работает без редактора: поиск, экспорт, версии, публикация.
+  Пересобирается из состояния Yjs, а не правится напрямую.
 
-Хранить один HTML и перезаписывать его целиком нельзя: при одновременной
+Хранить только JSON и перезаписывать его целиком нельзя: при одновременной
 правке победил бы тот, кто сохранил последним.
 """
-from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
+from django.db.models.functions import Upper
 
 from apps.core.models import TimeStampedModel, UUIDModel
-
-
-class DocumentMode(models.TextChoices):
-    PAGES = "pages", "Страницы"
-    PAGELESS = "pageless", "Без разбивки на страницы"
-
-
-class PageSize(models.TextChoices):
-    A4 = "a4", "A4"
-    LETTER = "letter", "Letter"
-    LEGAL = "legal", "Legal"
-
-
-class Orientation(models.TextChoices):
-    PORTRAIT = "portrait", "Книжная"
-    LANDSCAPE = "landscape", "Альбомная"
 
 
 class Folder(UUIDModel, TimeStampedModel):
@@ -70,18 +55,6 @@ class Document(UUIDModel, TimeStampedModel):
     plain_text = models.TextField("Текст для поиска", blank=True, editable=False)
     search_vector = SearchVectorField("Поисковый вектор", null=True, editable=False)
 
-    document_mode = models.CharField("Режим", max_length=10, choices=DocumentMode.choices,
-                                     default=DocumentMode.PAGES)
-    page_size = models.CharField("Формат", max_length=10, choices=PageSize.choices,
-                                 default=PageSize.A4)
-    orientation = models.CharField("Ориентация", max_length=10, choices=Orientation.choices,
-                                   default=Orientation.PORTRAIT)
-    margin_top = models.FloatField("Поле сверху, мм", default=20)
-    margin_bottom = models.FloatField("Поле снизу, мм", default=20)
-    margin_left = models.FloatField("Поле слева, мм", default=25)
-    margin_right = models.FloatField("Поле справа, мм", default=15)
-    page_color = models.CharField("Цвет страницы", max_length=7, default="#ffffff")
-
     is_published = models.BooleanField("Опубликован", default=False, db_index=True)
     deleted_at = models.DateTimeField("Удалён", null=True, blank=True, db_index=True)
 
@@ -105,6 +78,12 @@ class Document(UUIDModel, TimeStampedModel):
             models.Index(fields=["owner", "deleted_at"]),
             models.Index(fields=["owner", "-last_edited_at"]),
             GinIndex(fields=["search_vector"], name="documents_search_gin"),
+            # Триграммные индексы — под поиск по части слова и части номера:
+            # «450» должно находить «СЧ-4501-А». Полнотекстовый индекс ищет
+            # словами целиком и такого не умеет.
+            GinIndex(OpClass(Upper("title"), name="gin_trgm_ops"), name="documents_title_trgm"),
+            GinIndex(OpClass(Upper("plain_text"), name="gin_trgm_ops"),
+                     name="documents_text_trgm"),
         ]
 
     def __str__(self):

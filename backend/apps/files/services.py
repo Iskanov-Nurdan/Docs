@@ -15,13 +15,6 @@ from apps.files.models import StoredFile
 logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
-ALLOWED_IMPORT_TYPES = {
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
-    "text/plain",
-    "text/html",
-    "application/rtf",
-    "application/vnd.oasis.opendocument.text",  # odt
-}
 
 # Картинка больше этого размера разворачивается в памяти в сотни мегабайт —
 # классический способ уронить сервер одним файлом.
@@ -56,20 +49,51 @@ class FileService:
         logger.info("Загружено изображение %s (%s байт)", stored.id, stored.size)
         return stored
 
-    def upload_import(self, *, user, upload) -> StoredFile:
+    def import_document(self, *, user, upload, folder_id=None, ip: str | None = None):
+        """Создаёт таблицу из присланного файла Excel или CSV.
+
+        Формат определяется по расширению, но решает не оно: файл всё равно
+        разбирается, и «таблица.xlsx», внутри которой лежит что угодно другое,
+        не пройдёт дальше разбора.
+        """
+        from apps.documents.services import DocumentService
+        from apps.files.importers import ImportError_, csv_to_book, xlsx_to_book
+
         self._check_size(upload)
-        if upload.content_type not in ALLOWED_IMPORT_TYPES:
+
+        name = (upload.name or "Таблица").rsplit("/", 1)[-1]
+        stem, _, extension = name.rpartition(".")
+        extension = extension.lower()
+
+        if extension not in {"xlsx", "xlsm", "csv"}:
             raise BusinessError(
-                "Поддерживаются DOCX, TXT, HTML, RTF и ODT.", code="unsupported_type"
+                "Поддерживаются файлы Excel (.xlsx, .xlsm) и таблицы .csv. "
+                "Старый формат .xls откройте в Excel и сохраните как .xlsx.",
+                code="unsupported_type",
             )
-        return StoredFile.objects.create(
-            kind=StoredFile.Kind.IMPORT,
-            file=upload,
-            original_name=upload.name[:255],
-            content_type=upload.content_type,
-            size=upload.size,
-            uploaded_by=user,
+
+        data = upload.read()
+        try:
+            if extension == "csv":
+                content = csv_to_book(data, name=stem or "Лист1")
+            else:
+                content = xlsx_to_book(data)
+        except ImportError_ as error:
+            raise BusinessError(str(error), code="import_failed") from error
+
+        document = DocumentService().create(
+            user=user,
+            title=(stem or name)[:255],
+            content=content,
+            folder_id=folder_id,
+            ip=ip,
         )
+        cells = sum(len(sheet.get("cells", {})) for sheet in content["sheets"])
+        logger.info(
+            "Перенесён файл %s в документ %s: листов %s, ячеек %s",
+            name, document.id, len(content["sheets"]), cells,
+        )
+        return document
 
     def _check_size(self, upload) -> None:
         limit = settings.MAX_UPLOAD_BYTES

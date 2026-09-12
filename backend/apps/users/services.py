@@ -35,25 +35,6 @@ class UserService:
         self.confirmations = ConfirmationRepository()
 
     @transaction.atomic
-    def register(self, *, email: str, password: str, first_name: str = "", last_name: str = "") -> User:
-        if self.repository.email_exists(email):
-            raise BusinessError("Пользователь с таким email уже зарегистрирован.", code="email_taken")
-
-        user = User.objects.create_user(
-            email=email,
-            password=password,
-            first_name=first_name,
-            last_name=last_name,
-            cursor_color=secrets.choice(CURSOR_COLORS),
-        )
-        token = self.issue_confirmation(user, EmailConfirmation.Purpose.CONFIRM_EMAIL, CONFIRM_TTL)
-
-        from apps.notifications.tasks import send_email_confirmation
-
-        send_email_confirmation.delay(str(user.id), token)
-        logger.info("Зарегистрирован пользователь %s", user.email)
-        return user
-
     def issue_confirmation(self, user: User, purpose: str, ttl: timedelta) -> str:
         """Возвращает код одним разом: в базе остаётся только его хеш."""
         token = secrets.token_urlsafe(32)

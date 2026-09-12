@@ -14,7 +14,7 @@ from apps.files.services import FileService
 from apps.permissions.models import Role
 from apps.permissions.services import AccessService
 
-EXPORT_FORMATS = {"pdf", "docx", "txt", "html", "rtf", "odt"}
+EXPORT_FORMATS = {"xlsx", "csv", "pdf", "docx", "txt", "html"}
 
 
 class StoredFileSerializer(serializers.ModelSerializer):
@@ -52,23 +52,32 @@ class ImageUploadView(APIView):
 
 
 class DocumentImportView(APIView):
-    """Загрузка DOCX, TXT и HTML: файл принимается, разбор идёт в фоне."""
+    """Таблица из файла: Excel или CSV — в новый документ.
+
+    Разбор идёт сразу, а не фоновой задачей: человек ждёт на экране, и файл
+    в несколько тысяч строк разбирается быстрее, чем прошла бы очередь.
+    """
 
     parser_classes = (MultiPartParser, FormParser)
+    throttle_scope = "export"
 
     def post(self, request):
         upload = request.FILES.get("file")
         if upload is None:
             raise BusinessError("Файл не передан.", code="no_file")
 
-        stored = FileService().upload_import(user=request.user, upload=upload)
+        document = FileService().import_document(
+            user=request.user,
+            upload=upload,
+            folder_id=request.data.get("folder_id") or None,
+            ip=client_ip(request),
+        )
 
-        from apps.files.tasks import import_document
+        from apps.documents.serializers import DocumentDetailSerializer
 
-        task = import_document.delay(str(stored.id), str(request.user.id))
         return Response(
-            {"file": StoredFileSerializer(stored).data, "task_id": task.id},
-            status=status.HTTP_202_ACCEPTED,
+            DocumentDetailSerializer(document, context={"role": Role.OWNER}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -105,7 +114,7 @@ class DocumentExportView(APIView):
 
 
 class ExportStatusView(APIView):
-    """Опрос готовности выгрузки: клиент ждёт ссылку на файл."""
+    """Опрос готовности выгрузки."""
 
     def get(self, request, task_id):
         from celery.result import AsyncResult
@@ -117,7 +126,16 @@ class ExportStatusView(APIView):
             return Response({"status": "failed"}, status=status.HTTP_400_BAD_REQUEST)
 
         payload = result.get()
+
         stored = StoredFile.objects.filter(id=payload.get("file_id")).first()
         if stored is None:
             return Response({"status": "failed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Готовую выгрузку забирает тот, кто её заказывал. Раньше проверки не
+        # было вовсе: зная идентификатор задачи, любой вошедший получал ссылку
+        # на файл чужого документа — мимо и права на просмотр, и запрета
+        # скачивания. Идентификатор при этом уезжает клиенту и оседает в логах.
+        if stored.uploaded_by_id != request.user.id:
+            raise NotFoundError("Задача не найдена.")
+
         return Response({"status": "ready", "file": StoredFileSerializer(stored).data})

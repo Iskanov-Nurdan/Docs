@@ -15,7 +15,12 @@ from apps.permissions.services import AccessService
 
 logger = logging.getLogger(__name__)
 
-EMPTY_DOCUMENT = {"type": "doc", "content": [{"type": "paragraph"}]}
+# Пустая книга: один лист без единой заполненной ячейки. Размер сетки задаёт
+# клиент — на сервере храним только заполненные ячейки.
+EMPTY_SHEET = {
+    "kind": "sheet",
+    "sheets": [{"id": "s1", "name": "Лист1", "cells": {}, "cols": {}, "rows": {}}],
+}
 
 
 class DocumentService:
@@ -34,7 +39,7 @@ class DocumentService:
             title=plain_text(title) or "Без названия",
             owner=user,
             folder=folder,
-            content=content or EMPTY_DOCUMENT,
+            content=content or EMPTY_SHEET,
             last_edited_by=user,
             last_edited_at=timezone.now(),
         )
@@ -45,6 +50,11 @@ class DocumentService:
 
     @transaction.atomic
     def create_from_template(self, *, user, template, ip: str | None = None) -> Document:
+        # Шаблон хранит готовую книгу. Содержимое от прежнего текстового
+        # редактора создало бы документ, который нечем открыть.
+        if not isinstance(template.content, dict) or template.content.get("kind") != "sheet":
+            raise BusinessError("Шаблон устарел и больше не поддерживается.",
+                                code="template_outdated")
         return self.create(user=user, title=template.title, content=template.content, ip=ip)
 
     @transaction.atomic
@@ -53,20 +63,11 @@ class DocumentService:
         if not self.access.can_copy(user=user, document=document, role=role):
             raise BusinessError("Владелец запретил копирование документа.", code="copy_denied")
 
-        # Комментарии, история и права не переносятся: копия — независимый
-        # документ, а чужие обсуждения в ней были бы утечкой контекста.
+        # История и права не переносятся: копия — независимый документ.
         copy = Document.objects.create(
             title=f"Копия {document.title}"[:255],
             owner=user,
             content=document.content,
-            document_mode=document.document_mode,
-            page_size=document.page_size,
-            orientation=document.orientation,
-            margin_top=document.margin_top,
-            margin_bottom=document.margin_bottom,
-            margin_left=document.margin_left,
-            margin_right=document.margin_right,
-            page_color=document.page_color,
             last_edited_by=user,
             last_edited_at=timezone.now(),
         )

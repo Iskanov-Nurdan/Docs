@@ -1,112 +1,33 @@
-"""Преобразование документа между внутренним форматом и файлами.
+"""Преобразование книги в файлы.
 
-Внутренний формат — дерево узлов ProseMirror. Здесь оно превращается в HTML
-(из него получаются PDF и печать), в DOCX и обратно.
+Документ — листы с ячейками. Здесь он превращается в CSV, Excel, HTML
+и PDF. Разметка ProseMirror отсюда убрана вместе с текстовым редактором.
 """
 import html
 import logging
+import re
 from io import BytesIO
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Как размечать узлы в HTML: тег и нужен ли перевод строки после.
-BLOCK_TAGS = {
-    "paragraph": "p",
-    "blockquote": "blockquote",
-    "codeBlock": "pre",
-    "bulletList": "ul",
-    "orderedList": "ol",
-    "listItem": "li",
-    "taskList": "ul",
-    "table": "table",
-    "tableRow": "tr",
-    "tableCell": "td",
-    "tableHeader": "th",
-}
-
-MARK_TAGS = {
-    "bold": "strong",
-    "italic": "em",
-    "underline": "u",
-    "strike": "s",
-    "code": "code",
-    "superscript": "sup",
-    "subscript": "sub",
-}
+# Символы, с которых Excel и прочие таблицы начинают читать ячейку как формулу.
+_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
 
 
-def document_to_html(content: dict, *, title: str = "") -> str:
-    """Собирает самостоятельную HTML-страницу — её можно опубликовать как есть."""
-    body = _node_to_html(content)
-    safe_title = html.escape(title or "Документ")
-    return (
-        "<!doctype html>\n"
-        f'<html lang="ru"><head><meta charset="utf-8">'
-        f"<title>{safe_title}</title>"
-        "<style>body{font-family:Georgia,serif;max-width:820px;margin:40px auto;"
-        "line-height:1.6;padding:0 20px}table{border-collapse:collapse;width:100%}"
-        "td,th{border:1px solid #ccc;padding:6px 10px}img{max-width:100%}</style>"
-        f"</head><body>{body}</body></html>"
-    )
+def _defuse(value: str) -> str:
+    """Обезвреживает значение, которое получатель прочитал бы как формулу.
 
+    Два повода. Первый: в `display` шаблонных таблиц лежит сама формула
+    («=СУММ(I2:I4)»), имена функций у нас русские, и открывший выгрузку видел
+    «#ИМЯ?» вместо суммы. Второй: ячейка вида `=cmd|'/c calc'!A0`, набранная
+    одним редактором, выполнялась бы у того, кто откроет файл.
 
-def _node_to_html(node: Any) -> str:
-    if not isinstance(node, dict):
-        return ""
-
-    node_type = node.get("type")
-
-    if node_type == "text":
-        text = html.escape(node.get("text", ""))
-        # Метки оборачиваются в обратном порядке: ссылка снаружи начертания.
-        for mark in reversed(node.get("marks") or []):
-            mark_type = mark.get("type")
-            if mark_type == "link":
-                href = html.escape((mark.get("attrs") or {}).get("href", ""), quote=True)
-                text = f'<a href="{href}" rel="noopener noreferrer">{text}</a>'
-            elif mark_type in MARK_TAGS:
-                tag = MARK_TAGS[mark_type]
-                text = f"<{tag}>{text}</{tag}>"
-        return text
-
-    if node_type == "image":
-        attrs = node.get("attrs") or {}
-        src = html.escape(attrs.get("src", ""), quote=True)
-        alt = html.escape(attrs.get("alt", ""), quote=True)
-        return f'<img src="{src}" alt="{alt}">'
-
-    if node_type == "hardBreak":
-        return "<br>"
-
-    if node_type == "horizontalRule":
-        return "<hr>"
-
-    children = "".join(_node_to_html(child) for child in node.get("content") or [])
-
-    if node_type == "heading":
-        level = min(max(int((node.get("attrs") or {}).get("level", 1)), 1), 6)
-        anchor = (node.get("attrs") or {}).get("id")
-        # Якорь нужен оглавлению и ссылкам на раздел.
-        anchor_attr = f' id="{html.escape(str(anchor), quote=True)}"' if anchor else ""
-        return f"<h{level}{anchor_attr}>{children}</h{level}>"
-
-    if node_type == "taskItem":
-        checked = (node.get("attrs") or {}).get("checked")
-        box = "☑" if checked else "☐"
-        return f"<li>{box} {children}</li>"
-
-    if node_type in BLOCK_TAGS:
-        tag = BLOCK_TAGS[node_type]
-        return f"<{tag}>{children}</{tag}>"
-
-    return children
-
-
-def document_to_text(content: dict) -> str:
-    from apps.documents.text import extract_plain_text
-
-    return extract_plain_text(content)
+    Апостроф впереди — то, чем таблицы помечают «это текст»; при открытии он
+    не показывается.
+    """
+    if value.startswith(_FORMULA_STARTS):
+        return "'" + value
+    return value
 
 
 def html_to_pdf(html_source: str) -> bytes:
@@ -118,139 +39,270 @@ def html_to_pdf(html_source: str) -> bytes:
     return buffer.getvalue()
 
 
-def document_to_docx(content: dict, *, title: str = "") -> bytes:
-    """DOCX из дерева узлов: заголовки, абзацы, списки и таблицы."""
+# ------------------------------- Таблицы -------------------------------
+#
+# Книга хранится разреженно: в content лежат только заполненные ячейки
+# ("A1", "C7"), а не прямоугольник целиком. Для выгрузки её приходится
+# разворачивать в строки — по крайней заполненной ячейке.
+
+
+# Границы листа — те же, что и в редакторе (frontend/src/spreadsheet/formula.ts).
+# Без них одна ячейка с адресом «A100000000» разворачивалась в сетку на
+# сто миллионов строк: выгрузка съедала всю память и убивала рабочий процесс,
+# а задача при этом дважды повторялась.
+MAX_ROWS = 5000
+MAX_COLS = 100
+
+# Ещё один потолок, поверх размеров: разреженная книга может быть узкой и
+# очень длинной, и произведение важнее каждой из сторон по отдельности.
+MAX_CELLS = MAX_ROWS * MAX_COLS
+
+_ADDRESS = re.compile(r"^\$?([A-Za-z]{1,4})\$?([0-9]{1,7})$")
+
+
+def _column_index(letters: str) -> int:
+    """A -> 0, B -> 1, Z -> 25, AA -> 26."""
+    index = 0
+    for char in letters:
+        index = index * 26 + (ord(char) - ord("A") + 1)
+    return index - 1
+
+
+def parse_address(address: str) -> tuple[int, int] | None:
+    """Разбирает адрес ячейки. None — адрес битый или за пределами листа.
+
+    Разбор строгий. Прежний собирал буквы и цифры по всей строке, поэтому
+    «A1B2» превращалось в AB12 — ячейка уезжала не туда, куда указывала, —
+    а «A0» давало строку -1 и молча пропадало из выгрузки.
+    """
+    match = _ADDRESS.match(address.strip())
+    if not match:
+        return None
+
+    row = int(match.group(2)) - 1
+    column = _column_index(match.group(1).upper())
+    if row < 0 or row >= MAX_ROWS:
+        return None
+    if column < 0 or column >= MAX_COLS:
+        return None
+    return row, column
+
+
+def sheet_to_rows(content: dict, sheet_index: int = 0) -> list[list[str]]:
+    """Лист книги — прямоугольником строк.
+
+    В файл уходит показанное значение (`display`), а не формула: получатель
+    открывает выгрузку, чтобы увидеть числа, а не способ их получения.
+    """
+    sheets = content.get("sheets") or []
+    if sheet_index >= len(sheets):
+        return []
+
+    sheet = sheets[sheet_index]
+    cells = sheet.get("cells") if isinstance(sheet, dict) else None
+    # Содержимое приходит из базы и могло быть записано когда угодно: если
+    # ячейки не словарь, выгрузка должна выйти пустой, а не упасть с 500.
+    if not isinstance(cells, dict):
+        return []
+
+    parsed: dict[tuple[int, int], str] = {}
+
+    for address, cell in cells.items():
+        position = parse_address(str(address))
+        if position is None:
+            continue
+        if isinstance(cell, dict):
+            value = cell.get("display")
+            if value in (None, ""):
+                value = cell.get("value")
+        else:
+            value = cell
+        if value in (None, ""):
+            continue
+        parsed[position] = str(value)
+
+    if not parsed:
+        return []
+
+    height = max(row for row, _ in parsed) + 1
+    width = max(column for _, column in parsed) + 1
+
+    if height * width > MAX_CELLS:
+        logger.warning(
+            "Лист %s разворачивается в %s ячеек — выгрузка обрезана до %s",
+            sheet_index, height * width, MAX_CELLS,
+        )
+        height = min(height, MAX_ROWS)
+        width = min(width, MAX_COLS)
+
+    return [
+        [parsed.get((row, column), "") for column in range(width)]
+        for row in range(height)
+    ]
+
+
+def sheet_to_csv(content: dict) -> str:
+    """CSV с разделителем «;»: Excel в русской локали ждёт именно его."""
+    import csv
+    from io import StringIO
+
+    buffer = StringIO()
+    writer = csv.writer(buffer, delimiter=";", lineterminator="\r\n")
+    writer.writerows([_defuse(cell) for cell in row] for row in sheet_to_rows(content))
+    return buffer.getvalue()
+
+
+def sheet_to_text(content: dict) -> str:
+    """Табуляция между колонками — так значения переносятся в другие таблицы."""
+    return "\n".join("\t".join(row) for row in sheet_to_rows(content))
+
+
+def sheet_to_html(content: dict, *, title: str = "") -> str:
+    rows = sheet_to_rows(content)
+    body = "\n".join(
+        "<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        '<!doctype html>\n<html lang="ru"><head><meta charset="utf-8">'
+        f"<title>{html.escape(title)}</title>"
+        "<style>body{font-family:Arial,sans-serif;padding:24px}"
+        "table{border-collapse:collapse}"
+        "td{border:1px solid #d1e0f0;padding:4px 8px;font-size:11pt}</style>"
+        f"</head><body><h1>{html.escape(title)}</h1><table>{body}</table></body></html>"
+    )
+
+
+# Предел формата OOXML, а не наш: шире Word таблицу не открывает.
+_DOCX_MAX_COLS = 63
+
+
+def sheet_to_docx(content: dict, *, title: str = "") -> bytes:
     from docx import Document as DocxDocument
 
+    rows = sheet_to_rows(content)
     document = DocxDocument()
     if title:
-        document.core_properties.title = title
+        document.add_heading(title, level=1)
 
-    for node in content.get("content") or []:
-        _docx_node(document, node)
+    if rows:
+        # Word держит в таблице не больше 63 колонок: более широкий документ
+        # получается, но не открывается. Лишнее отрезаем и говорим об этом.
+        width = min(max(len(row) for row in rows), _DOCX_MAX_COLS)
+        if any(len(row) > _DOCX_MAX_COLS for row in rows):
+            logger.warning("Таблица шире %s колонок — в DOCX уходит только начало",
+                           _DOCX_MAX_COLS)
+
+        table = document.add_table(rows=0, cols=width)
+        table.style = "Table Grid"
+        for row in rows:
+            cells = table.add_row().cells
+            for index, value in enumerate(row[:width]):
+                cells[index].text = value
 
     buffer = BytesIO()
     document.save(buffer)
     return buffer.getvalue()
 
 
-def _docx_node(document, node: dict) -> None:
-    node_type = node.get("type")
+def sheet_to_xlsx(content: dict, *, title: str = "") -> bytes:
+    """Книга Excel.
 
-    if node_type == "heading":
-        level = min(max(int((node.get("attrs") or {}).get("level", 1)), 1), 6)
-        document.add_heading(_node_text(node), level=level)
-    elif node_type == "paragraph":
-        text = _node_text(node)
-        if text:
-            document.add_paragraph(text)
-    elif node_type in {"bulletList", "taskList"}:
-        for item in node.get("content") or []:
-            document.add_paragraph(_node_text(item), style="List Bullet")
-    elif node_type == "orderedList":
-        for item in node.get("content") or []:
-            document.add_paragraph(_node_text(item), style="List Number")
-    elif node_type == "blockquote":
-        document.add_paragraph(_node_text(node), style="Intense Quote")
-    elif node_type == "table":
-        _docx_table(document, node)
-    else:
-        text = _node_text(node)
-        if text:
-            document.add_paragraph(text)
+    В ячейки уходят значения, а не формулы: имена функций у нас русские
+    (СУММ, ЕСЛИ), и Excel их не понял бы — открывший файл увидел бы ошибку
+    вместо числа. Числа при этом остаются числами, чтобы в Excel работали
+    сортировка и собственные формулы поверх выгрузки.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
 
+    rows = sheet_to_rows(content)
 
-def _docx_table(document, node: dict) -> None:
-    rows = node.get("content") or []
-    if not rows:
-        return
-    columns = max(len(row.get("content") or []) for row in rows)
-    table = document.add_table(rows=0, cols=columns)
-    table.style = "Table Grid"
+    workbook = Workbook()
+    sheet = workbook.active
+    # Имя листа Excel ограничивает и запрещает часть символов.
+    sheet.title = "".join(ch for ch in (title or "Лист1") if ch not in "[]:*?/\\")[:31] or "Лист1"
 
-    for row in rows:
-        cells = table.add_row().cells
-        for index, cell in enumerate(row.get("content") or []):
-            if index < columns:
-                cells[index].text = _node_text(cell)
+    for row_index, row in enumerate(rows, start=1):
+        for column_index, value in enumerate(row, start=1):
+            cell = sheet.cell(row=row_index, column=column_index)
+            number = _as_number(value)
+            if number is None:
+                cell.value = value
+                # openpyxl решает «формула это или текст» по ведущему «=».
+                # Без явного типа выгрузка таблицы из шаблона открывалась
+                # с «#ИМЯ?» в каждой колонке с итогом.
+                if value:
+                    cell.data_type = "s"
+            else:
+                cell.value = number
+                cell.alignment = Alignment(horizontal="right")
 
+    # Первая строка почти всегда шапка: выделяем её и закрепляем при прокрутке.
+    if rows:
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+        sheet.freeze_panes = "A2"
 
-def _node_text(node: Any) -> str:
-    from apps.documents.text import extract_plain_text
+        widths: dict[int, int] = {}
+        for row in rows:
+            for column_index, value in enumerate(row, start=1):
+                widths[column_index] = max(widths.get(column_index, 8), min(len(value) + 2, 60))
+        for column_index, width in widths.items():
+            sheet.column_dimensions[get_column_letter(column_index)].width = width
 
-    return extract_plain_text(node).replace("\n", " ").strip()
-
-
-def docx_to_document(file_obj) -> dict:
-    """Разбор DOCX во внутренний формат: заголовки, абзацы, списки, таблицы."""
-    from docx import Document as DocxDocument
-
-    source = DocxDocument(file_obj)
-    content: list[dict] = []
-
-    for paragraph in source.paragraphs:
-        text = paragraph.text.strip()
-        if not text:
-            continue
-
-        style = (paragraph.style.name or "").lower()
-        if style.startswith("heading"):
-            try:
-                level = int(style.split()[-1])
-            except (ValueError, IndexError):
-                level = 1
-            content.append({
-                "type": "heading",
-                "attrs": {"level": min(max(level, 1), 6)},
-                "content": [{"type": "text", "text": text}],
-            })
-        elif "list bullet" in style:
-            content.append(_list_item("bulletList", text))
-        elif "list number" in style:
-            content.append(_list_item("orderedList", text))
-        else:
-            content.append({"type": "paragraph", "content": [{"type": "text", "text": text}]})
-
-    for table in source.tables:
-        content.append(_table_node(table))
-
-    if not content:
-        content = [{"type": "paragraph"}]
-    return {"type": "doc", "content": content}
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
 
 
-def _list_item(list_type: str, text: str) -> dict:
-    return {
-        "type": list_type,
-        "content": [{
-            "type": "listItem",
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
-        }],
-    }
+# Знаки валют, которые дописывает формат ячейки. В Excel им не место:
+# число со знаком внутри становится текстом, и ни сортировка, ни СУММ по
+# колонке уже не работают — а выгрузку берут как раз чтобы считать.
+_CURRENCY_MARKS = ("₽", "¥", "$", "€", "₸", "⃀", "сом", "com")
 
 
-def _table_node(table) -> dict:
-    rows = []
-    for row in table.rows:
-        cells = [
-            {
-                "type": "tableCell",
-                "content": [{
-                    "type": "paragraph",
-                    "content": ([{"type": "text", "text": cell.text}] if cell.text else []),
-                }],
-            }
-            for cell in row.cells
-        ]
-        rows.append({"type": "tableRow", "content": cells})
-    return {"type": "table", "content": rows}
+# Что именно считается числом. Правила те же, что в редакторе (parseLiteral):
+# пробел разделяет разряды только группами по три, ведущий ноль оставляет
+# текст текстом. Без этого «+996 700 123 456» уезжало в файл как 996700123456,
+# «007» превращалось в 7, а номер счёта из девятнадцати цифр терял разряды.
+_NUMBER = re.compile(
+    r"^-?(?:[0-9]{1,3}(?:[  ][0-9]{3})+|[0-9]+)(?:[.,][0-9]+)?$"
+)
+
+# Больше пятнадцати значащих цифр float не держит: такие строки — это номера,
+# а не количества, и округлять их нельзя.
+_MAX_DIGITS = 15
 
 
-def text_to_document(text: str) -> dict:
-    """Простой текст: каждая непустая строка — абзац."""
-    paragraphs = [
-        {"type": "paragraph", "content": [{"type": "text", "text": line}]}
-        for line in text.splitlines()
-        if line.strip()
-    ]
-    return {"type": "doc", "content": paragraphs or [{"type": "paragraph"}]}
+def _as_number(value: str) -> float | int | None:
+    """Строка «1 234,56» и «1 234,56 сом» — это число. Пустая строка и текст — нет."""
+    text = (value or "").strip()
+    lowered = text.lower()
+    for mark in _CURRENCY_MARKS:
+        if lowered.endswith(mark):
+            text = text[: len(text) - len(mark)].strip()
+            break
+
+    if not text or not _NUMBER.match(text):
+        return None
+
+    # «007» и «0123» — номер накладной, а не число: ведущий ноль не переживёт.
+    if re.match(r"^-?0[0-9]", text):
+        return None
+
+    digits = "".join(ch for ch in text if ch.isdigit()).lstrip("0")
+    if len(digits) > _MAX_DIGITS:
+        return None
+
+    normalized = text.replace(" ", "").replace(" ", "").replace(",", ".")
+    try:
+        number = float(normalized)
+    except ValueError:
+        return None
+
+    # inf и nan openpyxl записывает пустым значением: ячейка исчезала молча.
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return int(number) if number.is_integer() else number

@@ -10,13 +10,15 @@ urlpatterns = [
     path("django-admin/", admin.site.urls),
     path("health/", HealthView.as_view(), name="health"),
     path("api/", include("apps.users.urls")),
+    # Файлы идут раньше документов: маршрутизатор DRF ловит documents/<pk>/
+    # любым значением, и documents/import/ иначе попадал бы в него как pk.
+    path("api/", include("apps.files.urls")),
     path("api/", include("apps.documents.urls")),
     path("api/", include("apps.permissions.urls")),
     path("api/", include("apps.comments.urls")),
     path("api/", include("apps.versions.urls")),
     path("api/", include("apps.notifications.urls")),
     path("api/", include("apps.doc_templates.urls")),
-    path("api/", include("apps.files.urls")),
     path("api/", include("apps.publishing.urls")),
 ]
 

@@ -31,6 +31,11 @@ class DocumentTemplate(UUIDModel, TimeStampedModel):
     # документа, а не создают новый.
     is_building_block = models.BooleanField("Готовый блок", default=False, db_index=True)
     is_active = models.BooleanField("Показывать", default=True, db_index=True)
+
+    # Личный шаблон виден только автору. Своя заготовка — дело внутреннее:
+    # у одного это журнал рейсов со своими колонками, у другого счета, и
+    # общая галерея от таких заготовок быстро превратилась бы в свалку.
+    is_personal = models.BooleanField("Личный", default=False, db_index=True)
     order = models.PositiveIntegerField("Порядок", default=100)
     created_by = models.ForeignKey("users.User", verbose_name="Автор", on_delete=models.SET_NULL,
                                    null=True, blank=True, related_name="templates")

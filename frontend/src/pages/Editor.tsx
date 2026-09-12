@@ -1,8 +1,13 @@
-/** Страница редактора: шапка, режимы, участники, статус сохранения. */
+/** Страница таблицы: шапка, участники, выгрузка, доступ и история. */
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, tokens } from '@/api'
-import { DocumentEditor } from '@/editor/DocumentEditor'
+import { ExportMenu } from '@/components/ExportMenu'
+import { ArrowLeftIcon, HistoryIcon, ShareIcon } from '@/components/icons'
+import { Select } from '@/components/Select'
+import { ShareDialog } from '@/components/ShareDialog'
+import { VersionHistory } from '@/components/VersionHistory'
+import { SpreadsheetEditor } from '@/spreadsheet/SpreadsheetEditor'
 import { useAuth } from '@/store/auth'
 import type { Document, EditorMode, Presence, Role, SaveStatus } from '@/types'
 
@@ -20,10 +25,11 @@ const MODE_LABELS: Record<EditorMode, string> = {
   viewing: 'Просмотр',
 }
 
-/** Что доступно роли: комментатор не правит текст, но предлагает правки. */
+type Dialog = 'none' | 'share' | 'history'
+
+/** Что доступно роли: таблицу правят владелец и редактор, остальные смотрят. */
 function allowedModes(role: Role | null): EditorMode[] {
-  if (role === 'owner' || role === 'editor') return ['editing', 'suggesting', 'viewing']
-  if (role === 'commenter') return ['suggesting', 'viewing']
+  if (role === 'owner' || role === 'editor') return ['editing', 'viewing']
   return ['viewing']
 }
 
@@ -40,21 +46,27 @@ export function EditorPage() {
   const [presence, setPresence] = useState<Presence[]>([])
   const [mode, setMode] = useState<EditorMode>('editing')
   const [title, setTitle] = useState('')
+  const [dialog, setDialog] = useState<Dialog>('none')
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!id) return
     setLoading(true)
-    api
-      .getDocument(id, linkToken)
-      .then((loaded) => {
-        setDocument(loaded)
-        setTitle(loaded.title)
-        const modes = allowedModes(loaded.my_role)
-        setMode(modes[0])
-      })
-      .catch(() => setError('Документ не найден или недоступен'))
-      .finally(() => setLoading(false))
+    try {
+      const loaded = await api.getDocument(id, linkToken)
+      setDocument(loaded)
+      setTitle(loaded.title)
+      setMode(allowedModes(loaded.my_role)[0])
+      setError('')
+    } catch {
+      setError('Документ не найден или недоступен')
+    } finally {
+      setLoading(false)
+    }
   }, [id, linkToken])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const renameDocument = useCallback(async () => {
     if (!document || title === document.title) return
@@ -76,9 +88,9 @@ export function EditorPage() {
 
   if (error || !document || !user) {
     return (
-      <div className="p-12 text-center">
+      <div className="animate-rise p-12 text-center">
         <p className="mb-3 text-ink">{error || 'Документ недоступен'}</p>
-        <Link to="/docs" className="text-accent hover:underline">
+        <Link to="/documents" className="text-accent hover:underline">
           Вернуться к списку
         </Link>
       </div>
@@ -90,7 +102,7 @@ export function EditorPage() {
     id: user.id,
     name: user.display_name,
     initials: user.initials ?? user.display_name.slice(0, 2).toUpperCase(),
-    color: user.cursor_color ?? '#2563eb',
+    color: user.cursor_color ?? '#2a7ad6',
     avatar: user.avatar,
   }
 
@@ -98,8 +110,12 @@ export function EditorPage() {
     <div className="flex h-dvh flex-col bg-surface">
       <header className="border-b border-hairline px-4 py-2">
         <div className="flex flex-wrap items-center gap-3">
-          <Link to="/docs" className="shrink-0 text-lg" aria-label="К списку документов">
-            ←
+          <Link
+            to="/documents"
+            aria-label="К списку таблиц"
+            className="shrink-0 rounded-full p-1.5 text-ink-muted hover:bg-surface-muted"
+          >
+            <ArrowLeftIcon />
           </Link>
 
           <div className="min-w-0 flex-1">
@@ -119,35 +135,60 @@ export function EditorPage() {
             </p>
           </div>
 
-          <div className="flex items-center -space-x-2" aria-label="Кто сейчас в документе">
-            {presence.slice(0, 5).map((participant) => (
+          <div className="flex items-center -space-x-2" aria-label="Кто сейчас в таблице">
+            {presence.slice(0, 5).map((participant, index) => (
               <span
                 key={participant.id}
                 title={participant.name}
                 style={{ backgroundColor: participant.color }}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white ring-2 ring-surface"
+                className={[
+                  'h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white ring-2 ring-surface sm:h-8 sm:w-8',
+                  // Четвёртый и пятый участники видны только на широком экране:
+                  // на телефоне этот ряд вытесняет кнопки в следующий.
+                  index < 3 ? 'flex' : 'hidden sm:flex',
+                ].join(' ')}
               >
                 {participant.initials}
               </span>
             ))}
           </div>
 
-          <select
-            value={mode}
-            onChange={(event) => setMode(event.target.value as EditorMode)}
-            aria-label="Режим работы"
-            className="rounded border border-hairline bg-surface px-2 py-1.5 text-sm"
-          >
-            {modes.map((item) => (
-              <option key={item} value={item}>
-                {MODE_LABELS[item]}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-1">
+            <ExportMenu document={document} />
+
+            <button
+              type="button"
+              onClick={() => setDialog('history')}
+              className="flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-sm hover:bg-surface-muted"
+            >
+              <HistoryIcon size={16} />
+              {/* На телефоне остаётся один значок: подписи растягивают шапку
+                  на лишний ряд, а он отнимает высоту у самой таблицы. */}
+              <span className="hidden sm:inline">История</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDialog('share')}
+              className="flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            >
+              <ShareIcon size={16} />
+              <span className="hidden sm:inline">Поделиться</span>
+            </button>
+          </div>
+
+          {modes.length > 1 && (
+            <Select
+              label="Режим работы"
+              value={mode}
+              options={modes.map((item) => ({ value: item, label: MODE_LABELS[item] }))}
+              onChange={setMode}
+            />
+          )}
         </div>
       </header>
 
-      <DocumentEditor
+      <SpreadsheetEditor
         document={document}
         token={tokens.access ?? ''}
         linkToken={linkToken}
@@ -156,6 +197,28 @@ export function EditorPage() {
         onStatusChange={setStatus}
         onPresenceChange={setPresence}
       />
+
+      {dialog === 'share' && (
+        <ShareDialog
+          document={document}
+          onClose={() => setDialog('none')}
+          onDocumentChange={setDocument}
+        />
+      )}
+
+      {dialog === 'history' && (
+        <VersionHistory
+          documentId={document.id}
+          role={document.my_role}
+          onClose={() => setDialog('none')}
+          onRestored={() => {
+            setDialog('none')
+            // Восстановленная версия приходит в открытые вкладки приращением
+            // Yjs; страницу перечитываем ради свойств документа и заголовка.
+            load()
+          }}
+        />
+      )}
     </div>
   )
 }

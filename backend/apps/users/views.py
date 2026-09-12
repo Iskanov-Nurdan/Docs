@@ -16,26 +16,10 @@ from apps.users.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     ProfileUpdateSerializer,
-    RegisterSerializer,
     UserProfileSerializer,
     UserShortSerializer,
 )
 from apps.users.services import UserService
-
-
-class RegisterView(APIView):
-    permission_classes = (AllowAny,)
-    throttle_scope = "register"
-
-    def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = UserService().register(**serializer.validated_data)
-        tokens = UserService().issue_tokens(user)
-        return Response(
-            {"user": UserProfileSerializer(user).data, **tokens},
-            status=status.HTTP_201_CREATED,
-        )
 
 
 class LoginView(APIView):

@@ -15,7 +15,7 @@ export function LoginPage() {
     setError('')
     try {
       await login(email, password)
-      navigate('/docs')
+      navigate('/documents')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Не удалось войти')
     }
@@ -27,7 +27,9 @@ export function LoginPage() {
         onSubmit={submit}
         className="w-full max-w-sm rounded-xl border border-hairline bg-surface p-8 shadow-sm"
       >
-        <h1 className="mb-1 text-2xl font-semibold text-ink">Вход</h1>
+        <h1 className="mb-1 text-2xl font-semibold text-ink">
+          ALI<span className="text-accent"> trade</span>
+        </h1>
         <p className="mb-6 text-sm text-ink-muted">Документы и совместная работа</p>
 
         {error && (
@@ -68,14 +70,17 @@ export function LoginPage() {
           {loading ? 'Входим…' : 'Войти'}
         </button>
 
-        <div className="mt-4 flex justify-between text-sm">
-          <Link to="/register" className="text-accent hover:underline">
-            Регистрация
-          </Link>
+        <div className="mt-4 text-center text-sm">
           <Link to="/forgot-password" className="text-ink-muted hover:underline">
             Забыли пароль?
           </Link>
         </div>
+
+        {/* Регистрации нет: учётные записи заводит администратор. Без этой
+            подписи человек искал бы кнопку «зарегистрироваться». */}
+        <p className="mt-6 border-t border-hairline pt-4 text-center text-xs text-ink-muted">
+          Нет учётной записи? Её заводит администратор — обратитесь к нему.
+        </p>
       </form>
     </div>
   )
