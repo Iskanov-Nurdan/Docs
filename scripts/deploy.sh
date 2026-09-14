@@ -78,13 +78,19 @@ done_ "Фронтенд на месте: $(find "$WEB_DIR" -type f | wc -l) фа
 # Есть ли уже выпущенный сертификат. Проверяем в томе, а не на диске: файлы
 # лежат внутри docker, на хосте их нет.
 has_cert() {
-  docker run --rm -v docs-prod_certbot_certs:/etc/letsencrypt alpine:3.20 \
-    test -d "/etc/letsencrypt/live/$DOMAIN" 2>/dev/null
+  # Смотрим прямо в каталог тома на диске, без запуска контейнера: тот тянул
+  # бы образ из сети, и на медленном канале проверка выглядела зависанием —
+  # скрипт молчал минутами, ничего не печатая.
+  local dir
+  dir="$(docker volume inspect docs-prod_certbot_certs --format '{{ .Mountpoint }}' 2>/dev/null || true)"
+  [ -n "$dir" ] && [ -d "$dir/live/$DOMAIN" ]
 }
 
 use_config() {
   sed "s/__DOMAIN__/$DOMAIN/g" "nginx/$1" > nginx/active.conf
 }
+
+step "Проверяем, есть ли уже сертификат"
 
 if has_cert; then
   step "Сертификат уже выпущен — сразу поднимаем https"
@@ -98,9 +104,19 @@ fi
 
 # ------------------------------ Запуск служб ------------------------------
 
-step "Собираем образ приложения и поднимаем службы"
+step "Собираем образ приложения и поднимаем службы (в первый раз это несколько минут)"
 # Собирается только бэкенд: фронтенд уже готов и лежит в web/.
 $COMPOSE up -d --build
+
+# Занятый порт — самая частая причина, по которой не поднимается nginx: на
+# сервере уже работает свой веб-сервер, и docker не может занять 80-й.
+if command -v ss >/dev/null && ss -tln | grep -qE ':(80|443) '; then
+  if ! $COMPOSE ps --format '{{.Service}}' 2>/dev/null | grep -q nginx; then
+    fail "Порт 80 или 443 занят другой программой — обычно это системный nginx.
+  Освободите их и запустите скрипт снова:
+      systemctl stop nginx && systemctl disable nginx"
+  fi
+fi
 
 step "Ждём, пока приложение ответит"
 for i in $(seq 1 60); do
