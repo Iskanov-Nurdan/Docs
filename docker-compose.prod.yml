@@ -31,7 +31,10 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
-    command: redis-server --save "" --appendonly no --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # 128 МБ вместо 512: в Redis лежат только присутствие, кеш и очередь —
+    # всё транзитное. На маленьком сервере отданная ему память отнимается
+    # у приложения, которое её не отдаст обратно.
+    command: redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -84,7 +87,10 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
-    command: celery -A config worker --loglevel=warning --concurrency=2
+    # Один обработчик, а не два: выгрузки и письма идут редко, а на сервере
+    # с гигабайтом памяти каждый лишний процесс Python — это сотня мегабайт,
+    # которых не хватит приложению.
+    command: celery -A config worker --loglevel=warning --concurrency=1
     # Проверка своя: образ общий с веб-частью, и унаследованный запрос к
     # порту 8000 у обработчика очереди всегда падал — контейнер вечно
     # числился больным, хотя задачи выполнял.
