@@ -71,6 +71,10 @@ if [ ! -f "$WEB_DIR/index.html" ]; then
       rsync -az --delete web/ root@ЭТОТ-СЕРВЕР:$(pwd)/web/"
 fi
 
+# Файлы, привезённые scp, нередко приходят доступными только владельцу:
+# nginx внутри контейнера работает не от root и отвечает на такие «403».
+chmod -R a+rX "$WEB_DIR" 2>/dev/null || true
+
 done_ "Фронтенд на месте: $(find "$WEB_DIR" -type f | wc -l) файлов в $WEB_DIR"
 
 # --------------------------- Конфигурация nginx ---------------------------
