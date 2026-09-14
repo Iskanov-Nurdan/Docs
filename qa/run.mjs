@@ -585,6 +585,23 @@ const main = async () => {
     await context2.close()
   })
 
+  await step(page, 'Администратору доступен чужой документ', async () => {
+    const id = docUrl.split('/').pop()
+    const context3 = await browser.newContext({ locale: 'ru-RU' })
+    const boss = await context3.newPage()
+    await login(boss, ADMIN)
+
+    const { status, body } = await api(boss, `/documents/${id}/`)
+    assert(status === 200, `администратору чужой документ отдался с кодом ${status}`)
+    assert(body?.my_role === 'owner', `у администратора роль «${body?.my_role}», а не владелец`)
+
+    // И в списке «Доступные мне» он тоже виден — иначе до него не добраться.
+    const shared = await api(boss, '/documents/?scope=shared')
+    assert((shared.body?.results || []).some((item) => item.id === id),
+      'чужой документ не показан администратору в списке')
+    await context3.close()
+  })
+
   await step(page, 'Обычному пользователю админка недоступна', async () => {
     await page.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' })
     const { status } = await api(page, '/admin/summary/')

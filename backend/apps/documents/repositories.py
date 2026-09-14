@@ -10,20 +10,31 @@ class DocumentRepository:
         return Document.objects.select_related("owner", "folder", "last_edited_by")
 
     def visible_to(self, user) -> QuerySet[Document]:
-        """Свои документы и те, к которым выдан доступ."""
+        """Свои документы и те, к которым выдан доступ.
+
+        Администратору видно всё. Это его работа: разобраться, куда делась
+        таблица, посмотреть чужой журнал, когда человек в отпуске, забрать
+        документы уволившегося. Прятать их от того, кто и так заводит учётные
+        записи и раздаёт права, смысла нет — он всё равно доберётся, только
+        дольше и через базу.
+        """
         starred = StarredDocument.objects.filter(user=user, document=OuterRef("pk"))
-        return (
-            self.base_queryset()
-            .filter(Q(owner=user) | Q(permissions__user=user))
-            .annotate(is_starred=Exists(starred))
-            .distinct()
-        )
+        queryset = self.base_queryset()
+
+        if not (user.is_authenticated and user.is_staff):
+            queryset = queryset.filter(Q(owner=user) | Q(permissions__user=user))
+
+        return queryset.annotate(is_starred=Exists(starred)).distinct()
 
     def active(self, user) -> QuerySet[Document]:
         return self.visible_to(user).filter(deleted_at__isnull=True)
 
     def trashed(self, user) -> QuerySet[Document]:
-        """В корзине человек видит только то, что удалил сам."""
+        """В корзине человек видит только то, что удалил сам.
+
+        Администратор здесь не исключение: восстанавливать чужое удалённое —
+        не та задача, ради которой стоит показывать ему чужую корзину.
+        """
         return self.visible_to(user).filter(deleted_at__isnull=False, owner=user)
 
     def starred(self, user) -> QuerySet[Document]:

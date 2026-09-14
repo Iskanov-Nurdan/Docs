@@ -26,6 +26,12 @@ class AccessService:
         if document.owner_id and user and user.is_authenticated and document.owner_id == user.id:
             return Role.OWNER
 
+        # Администратор работает с любым документом как владелец: он заводит
+        # людей и раздаёт права, и отказывать ему в доступе к таблице конторы
+        # бессмысленно — вопрос решался бы через базу, только дольше.
+        if user and user.is_authenticated and user.is_staff:
+            return Role.OWNER
+
         roles: list[Role] = []
 
         if user and user.is_authenticated:
@@ -65,8 +71,9 @@ class AccessService:
 
         roles: dict = {}
         rest: list = []
+        admin = bool(user.is_staff)
         for document in documents:
-            if document.owner_id == user.id:
+            if admin or document.owner_id == user.id:
                 roles[document.id] = Role.OWNER
             else:
                 rest.append(document.id)
