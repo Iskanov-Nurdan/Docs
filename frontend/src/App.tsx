@@ -58,7 +58,18 @@ export function App() {
 
   return (
     <ErrorBoundary>
-      <BrowserRouter>
+      {/*
+        Поведение следующей версии маршрутизатора включено сразу.
+
+        Без этих двух признаков библиотека при каждом запуске пишет в консоль,
+        что в седьмой версии кое-что изменится, — и настоящие ошибки тонут
+        среди предупреждений о будущем. Обновления страниц теперь идут через
+        startTransition, а относительные пути внутри «*»-маршрута считаются
+        так же, как будут считаться потом.
+      */}
+      <BrowserRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
