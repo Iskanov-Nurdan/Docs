@@ -119,13 +119,31 @@ if command -v ss >/dev/null && ss -tln | grep -qE ':(80|443) '; then
 fi
 
 step "Ждём, пока приложение ответит"
-for i in $(seq 1 60); do
-  if $COMPOSE exec -T api curl -fsS http://127.0.0.1:8000/health/ >/dev/null 2>&1; then
+echo "  Первый запуск дольше обычного: применяются миграции базы."
+
+# Спрашиваем состояние у самого docker, а не заходим внутрь контейнера:
+# «compose exec» поднимает отдельный процесс на каждую попытку, и на слабом
+# сервере опрос выходил дороже того, что опрашивает.
+for i in $(seq 1 120); do
+  state="$(docker inspect --format '{{ .State.Health.Status }}' docs-prod-api-1 2>/dev/null || echo unknown)"
+
+  if [ "$state" = healthy ]; then
     done_ "Приложение отвечает"
     break
   fi
-  [ "$i" = 60 ] && fail "Приложение не поднялось за минуту. Смотрите: $COMPOSE logs api"
-  sleep 1
+
+  if [ "$state" = unhealthy ]; then
+    fail "Приложение поднялось, но отвечает ошибкой. Смотрите: $COMPOSE logs api"
+  fi
+
+  # Раз в полминуты показываем, что ожидание живое, и чем занято приложение.
+  if [ $((i % 15)) = 0 ]; then
+    echo "  …ещё ждём ($((i * 2)) с). Последнее из журнала:"
+    $COMPOSE logs api --tail 2 2>/dev/null | sed 's/^/    /'
+  fi
+
+  [ "$i" = 120 ] && fail "Приложение не поднялось за четыре минуты. Смотрите: $COMPOSE logs api"
+  sleep 2
 done
 
 # ---------------------------- Сертификат TLS ----------------------------
