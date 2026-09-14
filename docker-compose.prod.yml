@@ -71,6 +71,12 @@ services:
     networks: [backend]
 
   worker:
+    # Тот же образ, что у приложения, и та же сборка. Без секции build compose
+    # при первом запуске пытается скачать docs-api из реестра, которого нет,
+    # и падает на «pull access denied» ещё до того, как образ соберётся.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     image: docs-api:latest
     restart: unless-stopped
     env_file: [./.env]
@@ -97,6 +103,9 @@ services:
     networks: [backend]
 
   beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     image: docs-api:latest
     restart: unless-stopped
     env_file: [./.env]
