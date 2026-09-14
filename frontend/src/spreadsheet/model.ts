@@ -13,6 +13,9 @@ import {
   Evaluator, MAX_COLS, MAX_ROWS, cellRef, colIndex, colLabel, parseRef,
   type CellValue,
 } from './formula'
+// Отбор по промежутку сравнивает и время: «до среды» — это тот же разбор
+// срока, что красит просрочку.
+import { parseDeadline } from './statuses'
 
 export const ROW_HEIGHT = 24
 export const DEFAULT_COL_WIDTH = 100
@@ -863,25 +866,85 @@ export function setFrozen(doc: Y.Doc, sheet: SheetMap, patch: Partial<Frozen>): 
   doc.transact(() => sheet.set('frozen', next))
 }
 
-/** Разрешённые значения столбца. Пусто — фильтр по нему не стоит. */
-export function columnFilter(sheet: SheetMap, col: number): string[] | null {
-  const all = sheet.get('filters') as Record<string, string[]> | undefined
-  const values = all?.[String(col)]
-  return Array.isArray(values) ? values : null
+/**
+ * Отбор по столбцу: перечислением значений или промежутком.
+ *
+ * Перечисление отвечает на «покажи эту машину», промежуток — на «покажи, что
+ * должно прийти с понедельника по среду» и «долги больше ста тысяч». Список
+ * галочек для второго не годится: значений в колонке со временем столько же,
+ * сколько строк.
+ */
+export type ColumnFilter =
+  | { kind: 'values'; values: string[] }
+  | { kind: 'range'; from: string; to: string }
+
+/** Разбирает сохранённый отбор. Массив — прежний формат, только значения. */
+export function columnFilter(sheet: SheetMap, col: number): ColumnFilter | null {
+  const all = sheet.get('filters') as Record<string, unknown> | undefined
+  const stored = all?.[String(col)]
+  if (!stored) return null
+
+  if (Array.isArray(stored)) return { kind: 'values', values: stored as string[] }
+  if (typeof stored === 'object') {
+    const item = stored as Partial<ColumnFilter> & { from?: string; to?: string; values?: string[] }
+    if (item.kind === 'range') return { kind: 'range', from: item.from ?? '', to: item.to ?? '' }
+    if (Array.isArray(item.values)) return { kind: 'values', values: item.values }
+  }
+  return null
 }
 
 export function columnsWithFilter(sheet: SheetMap): number[] {
-  const all = sheet.get('filters') as Record<string, string[]> | undefined
+  const all = sheet.get('filters') as Record<string, unknown> | undefined
   if (!all) return []
   return Object.keys(all).map(Number).filter((col) => Number.isInteger(col))
 }
 
 export function setColumnFilter(doc: Y.Doc, sheet: SheetMap,
-                                col: number, values: string[] | null): void {
-  const all = { ...((sheet.get('filters') as Record<string, string[]>) ?? {}) }
-  if (values === null) delete all[String(col)]
-  else all[String(col)] = values
+                                col: number, filter: ColumnFilter | null): void {
+  const all = { ...((sheet.get('filters') as Record<string, unknown>) ?? {}) }
+  if (filter === null) delete all[String(col)]
+  else all[String(col)] = filter
   doc.transact(() => sheet.set('filters', all))
+}
+
+/**
+ * Значение ячейки числом — для сравнения в промежутке.
+ *
+ * Числа сравниваются числами, время и даты — мгновением на оси времени.
+ * «1 234,50 ₽» — это 1234.5: знак валюты и разряды приходят из формата ячейки,
+ * а не от человека, и мешать сравнению не должны.
+ */
+export function comparableValue(text: string): number | null {
+  const value = text.trim()
+  if (!value) return null
+
+  const moment = parseDeadline(value)
+  if (moment) return moment.getTime()
+
+  const cleaned = value.replace(/[^\d,.\-]/g, '').replace(/\s/g, '').replace(',', '.')
+  if (!cleaned || cleaned === '-') return null
+  const number = Number(cleaned)
+  return Number.isFinite(number) ? number : null
+}
+
+/** Проходит ли значение отбор. */
+export function filterAccepts(filter: ColumnFilter, text: string): boolean {
+  if (filter.kind === 'values') return filter.values.includes(text)
+
+  const value = comparableValue(text)
+  const from = comparableValue(filter.from)
+  const to = comparableValue(filter.to)
+
+  if (value === null) {
+    // Не число и не время: в промежуток попасть не может. Пустые строки при
+    // отборе по сроку прячем — иначе «что придёт сегодня» показывает и
+    // незаполненные строки, ради которых отбор и затевали.
+    return false
+  }
+
+  if (from !== null && value < from) return false
+  if (to !== null && value > to) return false
+  return true
 }
 
 /**
@@ -906,15 +969,79 @@ export function hiddenRows(
 
   for (let row = 1; row <= last; row += 1) {
     for (const col of columns) {
-      const allowed = columnFilter(sheet, col)
-      if (!allowed) continue
-      if (!allowed.includes(display(row, col))) {
+      const filter = columnFilter(sheet, col)
+      if (!filter) continue
+      if (!filterAccepts(filter, display(row, col))) {
         hidden.add(row)
         break
       }
     }
   }
   return hidden
+}
+
+/**
+ * Номер столбца по началу его заголовка. null — такого столбца нет.
+ *
+ * Ищем по шапке, а не по номеру: у каждого свой порядок колонок, и привязка
+ * к «столбцу K» сломалась бы от одной вставки слева.
+ */
+export function findColumn(sheet: SheetMap, prefixes: string[]): number | null {
+  const total = colCount(sheet)
+  for (let col = 0; col < total; col += 1) {
+    const header = (readRaw(sheet, 0, col) ?? '').trim().toLowerCase()
+    if (!header) continue
+    if (prefixes.some((prefix) => header.startsWith(prefix))) return col
+  }
+  return null
+}
+
+/** Заголовки колонок, которые заполняет отметка о приёмке. */
+export const ARRIVAL_COLUMNS = {
+  status: ['статус', 'состояние', 'status', 'абал'],
+  acceptedBy: ['принял', 'кто принял', 'приёмщик', 'приемщик', 'accepted'],
+  acceptedAt: ['принято', 'время приёмки', 'время приемки', 'факт'],
+}
+
+/**
+ * Отметка о прибытии машины.
+ *
+ * Ставит статус, имя принявшего и время — одним нажатием, чтобы это не
+ * набирали руками по три ячейки и не забывали половину. Пишется в те колонки,
+ * которые нашлись: таблица без колонки «Принял» всё равно получит статус.
+ *
+ * Возвращает список заполненного — по нему интерфейс говорит, что произошло.
+ */
+export function markArrived(doc: Y.Doc, sheet: SheetMap, row: number,
+                            who: string): string[] {
+  if (row <= 0) return []
+
+  const now = new Date()
+  const time = `${String(now.getDate()).padStart(2, '0')}.`
+    + `${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} `
+    + `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+
+  const filled: string[] = []
+  doc.transact(() => {
+    const status = findColumn(sheet, ARRIVAL_COLUMNS.status)
+    if (status !== null) {
+      writeCell(doc, sheet, row, status, 'Прибыл')
+      filled.push('статус')
+    }
+
+    const by = findColumn(sheet, ARRIVAL_COLUMNS.acceptedBy)
+    if (by !== null && who) {
+      writeCell(doc, sheet, row, by, who)
+      filled.push('кто принял')
+    }
+
+    const at = findColumn(sheet, ARRIVAL_COLUMNS.acceptedAt)
+    if (at !== null) {
+      writeCell(doc, sheet, row, at, time)
+      filled.push('время')
+    }
+  })
+  return filled
 }
 
 /** Список допустимых значений столбца: вместо набора руками — выбор. */
@@ -998,28 +1125,30 @@ export const newChartId = () => `c${Math.random().toString(36).slice(2, 8)}`
 /**
  * Сортировка строк по столбцу.
  *
- * Переставляются идентификаторы строк, а не содержимое: ячейки опознаются по
- * идентификатору и едут за своей строкой сами. Формулы внутри переехавшей
- * строки переписываются на новое место — «=E2*F2» из второй строки в пятой
- * становится «=E5*F5», как при протягивании.
+ * Переставляется содержимое строк, а не сами строки. Казалось бы, проще
+ * переложить идентификаторы в списке строк — но в CRDT это разрушительно:
+ * удаление с последующей вставкой тех же значений сливается с состоянием,
+ * пришедшим от сервера или из местного хранилища, как две разные правки, и
+ * строки размножаются. Проверено на живой вкладке: после сортировки лист
+ * распухал вдвое, а данные уезжали за пределы экрана.
+ *
+ * Поэтому список строк остаётся нетронутым, а по местам едут ячейки. Формулы
+ * внутри переехавшей строки переписываются на новое место — «=E2*F2» из
+ * второй строки в пятой становится «=E5*F5», как при протягивании.
  *
  * Строки вне участка from..to не трогаются: шапка сверху и итог снизу должны
  * остаться там, где стояли.
  */
 export function sortRows(doc: Y.Doc, sheet: SheetMap, col: number,
                          direction: 'asc' | 'desc', from: number, to: number): void {
-  const rows = rowsArray(sheet)
-  if (!rows) return
-
+  const total = rowCount(sheet)
   const first = Math.max(0, Math.trunc(from))
-  const last = Math.min(rows.length - 1, Math.trunc(to))
+  const last = Math.min(total - 1, Math.trunc(to))
   if (last <= first) return
 
-  const items: Array<{ id: string; row: number; text: string }> = []
+  const items: Array<{ row: number; text: string }> = []
   for (let row = first; row <= last; row += 1) {
-    const id = rows.get(row)
-    if (id === undefined) return
-    items.push({ id, row, text: (readRaw(sheet, row, col) ?? '').trim() })
+    items.push({ row, text: (readRaw(sheet, row, col) ?? '').trim() })
   }
 
   const numeric = (text: string) => {
@@ -1045,21 +1174,49 @@ export function sortRows(doc: Y.Doc, sheet: SheetMap, col: number,
 
   if (sorted.every((item, index) => item.row === first + index)) return
 
-  doc.transact(() => {
-    rows.delete(first, items.length)
-    rows.insert(first, sorted.map((item) => item.id))
+  const cells = cellsOf(sheet)
 
-    const cells = cellsOf(sheet)
+  // Снимок содержимого каждой строки участка: номер столбца и поля ячейки.
+  const snapshot = new Map<number, Array<{ col: number; data: Array<[string, unknown]> }>>()
+  for (const item of items) {
+    const rowId = rowIdAt(sheet, item.row)
+    if (rowId === null) return
+    const row: Array<{ col: number; data: Array<[string, unknown]> }> = []
+    cells.forEach((cell, mapKey) => {
+      const at = mapKey.indexOf(':')
+      if (mapKey.slice(0, at) !== rowId) return
+      row.push({ col: Number(mapKey.slice(at + 1)), data: Array.from(cell.entries()) })
+    })
+    snapshot.set(item.row, row)
+  }
+
+  doc.transact(() => {
+    // Сначала убираем всё с участка, иначе ячейка, которой нет в новой
+    // строке, осталась бы от прежней.
+    for (const item of items) {
+      const rowId = rowIdAt(sheet, item.row)
+      if (rowId === null) continue
+      for (const mapKey of Array.from(cells.keys())) {
+        if (mapKey.slice(0, mapKey.indexOf(':')) === rowId) cells.delete(mapKey)
+      }
+    }
+
     sorted.forEach((item, index) => {
       const target = first + index
-      if (target === item.row) return
-      cells.forEach((cell, mapKey) => {
-        if (mapKey.slice(0, mapKey.indexOf(':')) !== item.id) return
-        const raw = cell.get(KEYS.raw)
-        if (typeof raw !== 'string' || !raw.startsWith('=')) return
-        const next = shiftFormulaToRow(raw, item.row, target)
-        if (next !== raw) cell.set(KEYS.raw, next)
-      })
+      const targetId = rowIdAt(sheet, target)
+      if (targetId === null) return
+
+      for (const { col: column, data } of snapshot.get(item.row) ?? []) {
+        const cell = new Y.Map<unknown>()
+        for (const [field, value] of data) {
+          if (field === KEYS.raw && typeof value === 'string' && value.startsWith('=')) {
+            cell.set(field, shiftFormulaToRow(value, item.row, target))
+          } else {
+            cell.set(field, value)
+          }
+        }
+        cells.set(key(targetId, column), cell)
+      }
     })
   })
 }
@@ -1076,6 +1233,104 @@ export function rowHasFormula(sheet: SheetMap, row: number): boolean {
     if (typeof raw === 'string' && raw.startsWith('=')) found = true
   })
   return found
+}
+
+/** Название листа, куда уезжают прибывшие рейсы. */
+export const DELIVERED_SHEET = 'Груз прибыл'
+
+/**
+ * Переносит строку на другой лист книги.
+ *
+ * Прибывший рейс в рабочем журнале только мешает: он уже никуда не едет, а
+ * место занимает и глаза отвлекает. В таблицах такое разносят по вкладкам
+ * руками — вырезал, вставил; здесь это делает кнопка приёмки.
+ *
+ * Лист-приёмник создаётся при первом переносе и получает ту же шапку, иначе
+ * колонки на нём не совпали бы с журналом и отбор по ним перестал бы работать.
+ *
+ * Возвращает номер строки на листе-приёмнике или -1, если переносить нечего.
+ */
+export function moveRowToSheet(doc: Y.Doc, from: SheetMap, row: number,
+                               sheetName: string): number {
+  if (row <= 0) return -1
+
+  const rowId = rowIdAt(from, row)
+  if (rowId === null) return -1
+
+  // Содержимое строки и шапка — снимком, до всяких изменений.
+  const cells = cellsOf(from)
+  const payload: Array<{ col: number; data: Array<[string, unknown]> }> = []
+  cells.forEach((cell, mapKey) => {
+    const at = mapKey.indexOf(':')
+    if (mapKey.slice(0, at) !== rowId) return
+    payload.push({ col: Number(mapKey.slice(at + 1)), data: Array.from(cell.entries()) })
+  })
+  if (payload.length === 0) return -1
+
+  const header: Array<{ col: number; data: Array<[string, unknown]> }> = []
+  const headerId = rowIdAt(from, 0)
+  if (headerId !== null) {
+    cells.forEach((cell, mapKey) => {
+      const at = mapKey.indexOf(':')
+      if (mapKey.slice(0, at) !== headerId) return
+      header.push({ col: Number(mapKey.slice(at + 1)), data: Array.from(cell.entries()) })
+    })
+  }
+
+  let landed = -1
+
+  doc.transact(() => {
+    const sheets = book(doc)
+    let target = sheets.toArray().find((item) => String(item.get('name')) === sheetName)
+
+    if (!target) {
+      target = makeSheet(sheetName)
+      sheets.push([target])
+      // Шапка переезжает вместе с первой записью: без неё на новом листе
+      // не работали бы ни отбор, ни подсветка срока.
+      const targetCells = cellsOf(target)
+      const targetHeaderId = rowIdAt(target, 0)
+      if (targetHeaderId !== null) {
+        for (const { col, data } of header) {
+          const cell = new Y.Map<unknown>()
+          for (const [field, value] of data) cell.set(field, value)
+          targetCells.set(key(targetHeaderId, col), cell)
+        }
+      }
+      // Столбцов на приёмнике должно быть не меньше, чем в журнале.
+      const width = colCount(from)
+      if (colCount(target) < width) target.set('colCount', width)
+    }
+
+    const at = Math.max(lastFilledRow(target) + 1, 1)
+    const rows = rowsArray(target)
+    if (rows && at >= rows.length) {
+      rows.push(Array.from({ length: at - rows.length + 1 }, newRowId))
+    }
+
+    const targetId = rowIdAt(target, at)
+    if (targetId === null) return
+
+    const targetCells = cellsOf(target)
+    for (const { col, data } of payload) {
+      const cell = new Y.Map<unknown>()
+      for (const [field, value] of data) {
+        // Формула, посчитанная от соседей по журналу, на новом листе
+        // считала бы пустоту: переносим то, что она показывала.
+        if (field === KEYS.raw && typeof value === 'string' && value.startsWith('=')) {
+          cell.set(field, shiftFormulaToRow(value, row, at))
+        } else {
+          cell.set(field, value)
+        }
+      }
+      targetCells.set(key(targetId, col), cell)
+    }
+
+    landed = at
+    deleteRow(doc, from, row)
+  })
+
+  return landed
 }
 
 /**

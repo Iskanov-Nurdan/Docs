@@ -19,9 +19,9 @@ from datetime import date, datetime, time
 
 logger = logging.getLogger(__name__)
 
-# Пределы листа в редакторе (frontend/src/spreadsheet/model.ts). Файл крупнее
+# Пределы листа в редакторе (frontend/src/spreadsheet/formula.ts). Файл крупнее
 # обрезается: строки за границей всё равно негде показать.
-MAX_ROWS = 5000
+MAX_ROWS = 200000
 MAX_COLS = 100
 
 # Имена функций, которые понимает редактор, — русские и английские вместе.

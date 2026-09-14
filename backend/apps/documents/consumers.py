@@ -24,8 +24,9 @@ from apps.permissions.services import AccessService
 logger = logging.getLogger(__name__)
 
 # Приращение больше этого размера — почти наверняка не правка человека,
-# а попытка забить память сервера.
-MAX_UPDATE_BYTES = 1024 * 1024
+# а попытка забить память сервера. Восемь мегабайт: перенос журнала на
+# десятки тысяч строк приходит одним куском и в мегабайт не укладывался.
+MAX_UPDATE_BYTES = 8 * 1024 * 1024
 
 
 # Сколько секунд после подключения пустой снимок считается недоразумением,
@@ -131,6 +132,13 @@ class DocumentConsumer(AsyncWebsocketConsumer):
                 "Сообщение документа %s на %s байт отброшено: предел %s",
                 self.document_id, len(text_data), settings.MAX_DOCUMENT_BYTES,
             )
+            # Молчать нельзя: вкладка считала бы, что всё сохранено, а книга
+            # на сервере осталась бы прежней — до первого закрытия вкладки.
+            await self.send(text_data=json.dumps({
+                "type": "snapshot_rejected",
+                "reason": "too_large",
+                "limit": settings.MAX_DOCUMENT_BYTES,
+            }))
             return
 
         try:

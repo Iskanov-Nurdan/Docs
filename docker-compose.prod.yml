@@ -6,7 +6,8 @@
 #   правкой файла на сервере: обновление идёт только пересборкой;
 # * наружу открыты только 80 и 443. База, Redis и приложение доступны лишь
 #   внутри сети docker — снаружи к ним не подключиться даже с самого сервера;
-# * фронтенд собран заранее и раздаётся статикой, сервера разработки нет;
+# * фронтенд приезжает уже собранным, папкой web/ — nginx раздаёт её как есть.
+#   Сервер не держит ни node, ни зависимостей, ни исходников фронта;
 # * сертификат TLS выпускает и продлевает certbot, nginx перечитывает его сам.
 name: docs-prod
 
@@ -78,6 +79,15 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
     command: celery -A config worker --loglevel=warning --concurrency=2
+    # Проверка своя: образ общий с веб-частью, и унаследованный запрос к
+    # порту 8000 у обработчика очереди всегда падал — контейнер вечно
+    # числился больным, хотя задачи выполнял.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     volumes:
       - media_files:/app/mediafiles
     depends_on:
@@ -94,25 +104,20 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
-    command: celery -A config beat --loglevel=warning
+    command: celery -A config beat --loglevel=warning --schedule=/tmp/celerybeat-schedule
+    # У расписания нет ни порта, ни очереди. Смотрим отметку времени, которую
+    # оно обновляет при каждом срабатывании: файла свежее пяти минут достаточно,
+    # чтобы понять, что оно живо. Утилит вроде pgrep в образе нет.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,sys,time; f='/tmp/celerybeat-schedule'; sys.exit(0 if os.path.exists(f) and time.time()-os.path.getmtime(f) < 300 else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       api: {condition: service_started}
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
-    networks: [backend]
-
-  # Собранный фронтенд. Адрес API задаётся на сборке, а не при запуске:
-  # Vite подставляет переменные в код, менять их потом уже нечего.
-  web:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      target: production
-      args:
-        VITE_API_URL: ${VITE_API_URL:-/api}
-        VITE_WS_URL: ${VITE_WS_URL:-}
-    image: docs-web:latest
-    restart: unless-stopped
     networks: [backend]
 
   nginx:
@@ -126,8 +131,14 @@ services:
       # сертификата — временный, без TLS; после — боевой.
       - ./nginx/active.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/proxy_params_custom.conf:/etc/nginx/proxy_params_custom.conf:ro
+      - ./nginx/security_headers.conf:/etc/nginx/security_headers.conf:ro
       - static_files:/usr/share/nginx/static:ro
       - media_files:/usr/share/nginx/media:ro
+      # Собранный фронтенд. Сюда кладут готовый dist — сборкой сервер не
+      # занимается: node, зависимости и исходники ему для этого не нужны.
+      # Путь можно сменить через WEB_DIR в .env, если статика лежит не рядом
+      # с этим файлом, а, скажем, в /opt/alitrade/frontend.
+      - ${WEB_DIR:-./web}:/usr/share/nginx/web:ro
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
     # Сертификат меняется раз в два месяца, а конфигурацию nginx кеширует при
@@ -137,7 +148,6 @@ services:
       sh -c "while :; do sleep 6h; nginx -s reload; done & nginx -g 'daemon off;'"
     depends_on:
       - api
-      - web
     networks: [backend]
 
   # Выпуск и продление сертификата. Проверка идёт каждые 12 часов: Let's Encrypt

@@ -201,3 +201,26 @@ export type Presence = {
 }
 
 export type SaveStatus = 'saved' | 'saving' | 'offline' | 'syncing' | 'error'
+
+/** Точка маршрута из общего справочника. */
+export type Place = {
+  id: string
+  name: string
+  /** Написание, приведённое к сравнимому виду: по нему ищется плечо. */
+  key: string
+  is_active: boolean
+  order: number
+}
+
+/** Плечо маршрута: сколько часов от точки до точки. */
+export type RouteLeg = {
+  id: string
+  origin: string
+  destination: string
+  origin_name: string
+  destination_name: string
+  origin_key: string
+  destination_key: string
+  hours: string
+  note: string
+}

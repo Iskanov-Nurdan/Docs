@@ -6,6 +6,7 @@ import { ForgotPasswordPage } from '@/pages/ForgotPassword'
 import { ResetPasswordPage } from '@/pages/ResetPassword'
 import { ConfirmEmailPage } from '@/pages/ConfirmEmail'
 import { DocumentsPage } from '@/pages/Documents'
+import { RoutesPage } from '@/pages/Routes'
 import { TemplatesPage } from '@/pages/Templates'
 import { SettingsPage } from '@/pages/Settings'
 import { AdminPage } from '@/pages/Admin'
@@ -118,6 +119,14 @@ export function App() {
             element={
               <Protected>
                 <TemplatesPage />
+              </Protected>
+            }
+          />
+          <Route
+            path="/routes"
+            element={
+              <Protected>
+                <RoutesPage />
               </Protected>
             }
           />

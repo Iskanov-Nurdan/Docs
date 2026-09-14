@@ -74,6 +74,15 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
     command: celery -A config worker --loglevel=info --concurrency=2
+    # Проверка своя: образ общий с веб-частью, и унаследованный запрос к
+    # порту 8000 у обработчика очереди всегда падал — контейнер вечно
+    # числился больным, хотя задачи выполнял.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     volumes:
       - ./backend:/app
       - media_files:/app/mediafiles
@@ -92,7 +101,16 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
-    command: celery -A config beat --loglevel=info
+    command: celery -A config beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    # У расписания нет ни порта, ни очереди. Смотрим отметку времени, которую
+    # оно обновляет при каждом срабатывании: файла свежее пяти минут достаточно,
+    # чтобы понять, что оно живо. Утилит вроде pgrep в образе нет.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,sys,time; f='/tmp/celerybeat-schedule'; sys.exit(0 if os.path.exists(f) and time.time()-os.path.getmtime(f) < 300 else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
       - ./backend:/app
     depends_on:

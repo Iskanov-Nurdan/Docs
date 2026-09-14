@@ -17,7 +17,7 @@
  * строке на плечо. Иначе срок у рейса был бы один, конечный, и застрявшую
  * посередине машину таблица заметила бы только в самом конце пути.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type * as Y from 'yjs'
 import { Modal } from '@/components/Modal'
 import { Select } from '@/components/Select'
@@ -35,8 +35,10 @@ import {
   writeCell,
 } from './model'
 import { STATUS_TONES, isDeadlineHeader, parseDeadline } from './statuses'
+import { formatMoment, formatVia, routeHours, viaColumn } from './routing'
+import { useRoutes } from '@/store/routes'
 
-type FieldKind = 'text' | 'deadline' | 'status' | 'formula' | 'from' | 'to' | 'departure'
+type FieldKind = 'text' | 'deadline' | 'status' | 'formula' | 'from' | 'to' | 'via' | 'departure'
 
 type Field = {
   col: number
@@ -46,12 +48,20 @@ type Field = {
   formula?: string
 }
 
-/** Промежуточная точка: пункт и время прибытия в него. */
-type Waypoint = { place: string; arrive: string }
+/** Промежуточная точка по пути. */
+type Waypoint = { place: string }
 
-const HEADERS: Record<'from' | 'to' | 'status' | 'departure', string[]> = {
+/** Значение колонки даты — от неё считается срок, если время выезда не задали. */
+function dateValue(fields: Field[], values: Record<number, string>): string {
+  const field = fields.find((item) => item.label.trim().toLowerCase().startsWith('дата'))
+  return field ? (values[field.col] ?? '') : ''
+}
+
+const HEADERS: Record<'from' | 'to' | 'via' | 'status' | 'departure', string[]> = {
   from: ['откуда', 'from', 'кайдан', 'пункт отправ', 'отправление', '出发地', '起点'],
   to: ['куда', 'to', 'кайда', 'пункт назнач', 'назначение', '目的地', '终点'],
+  // Точки по пути задаются в блоке маршрута, отдельным полем их не спрашиваем.
+  via: ['через', 'промежут', 'по пути', 'транзит', 'остановк', 'via'],
   status: ['статус', 'состояние', 'status', 'абал', '状态', '状况'],
   departure: ['вышел', 'выехал', 'выезд', 'отправил', 'погруз', 'чыкты', 'жонот',
               'departure', 'left', 'shipped', '发车', '出发时间'],
@@ -111,8 +121,10 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
 
       const kind: FieldKind = headerIs(header, 'from')
         ? 'from'
-        : headerIs(header, 'to')
-          ? 'to'
+        : headerIs(header, 'via')
+          ? 'via'
+          : headerIs(header, 'to')
+            ? 'to'
           : isDeadlineHeader(header)
             ? 'deadline'
             : headerIs(header, 'status')
@@ -126,7 +138,7 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet, cols, version, plan.sample])
 
-  const route = useMemo(() => {
+  const routeCols = useMemo(() => {
     const find = (kind: FieldKind) => fields.find((item) => item.kind === kind)
     const from = find('from')
     const to = find('to')
@@ -139,25 +151,14 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
     }
   }, [fields])
 
-  /**
-   * Колонки, которые суммируются итогом.
-   *
-   * В плечах маршрута они остаются пустыми: сумма закупа относится к рейсу
-   * целиком, и продублированная по трём строкам она утроила бы итог.
-   */
-  const summed = useMemo(() => {
-    const set = new Set<number>()
-    if (plan.totalRow < 0) return set
-    for (const item of fields) {
-      const value = readRaw(sheet, plan.totalRow, item.col)
-      if (value && value.startsWith('=')) set.add(item.col)
-    }
-    return set
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fields, sheet, version, plan.totalRow])
-
   const [values, setValues] = useState<Record<number, string>>({})
   const [waypoints, setWaypoints] = useState<Waypoint[]>([])
+  const { legs, places, load: loadRoutes } = useRoutes()
+  const placeNames = useMemo(() => places.map((place) => place.name), [places])
+
+  useEffect(() => {
+    loadRoutes()
+  }, [loadRoutes])
 
   const set = (col: number, value: string) =>
     setValues((current) => ({ ...current, [col]: value }))
@@ -174,77 +175,69 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
   const fieldClass =
     'w-full rounded-xl border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent'
 
-  /** Плечи маршрута: A→точка, точка→точка, точка→Б. Без точек — одно плечо. */
-  const legs = useMemo(() => {
-    const from = route.from ? (values[route.from.col] ?? '') : ''
-    const to = route.to ? (values[route.to.col] ?? '') : ''
-    const arrive = route.arrive ? (values[route.arrive.col] ?? '') : ''
+  /**
+   * Расчётное время прибытия по всему пути.
+   *
+   * Раньше маршрут с точками разворачивался в несколько строк — по строке на
+   * плечо. Так рейс рассыпался по журналу: три строки на одну машину, в
+   * каждой половина колонок пустая. Теперь рейс остаётся одной записью, а
+   * точки по пути идут отдельной колонкой «Через» — и время считается по всей
+   * цепочке: Бишкек → Кашгар → Ош складывается из двух плеч.
+   */
+  const plannedArrival = useMemo(() => {
+    const from = routeCols.from ? (values[routeCols.from.col] ?? '') : ''
+    const to = routeCols.to ? (values[routeCols.to.col] ?? '') : ''
+    const stops = waypoints.map((point) => point.place).filter((place) => place.trim())
 
-    const stops = waypoints.filter((point) => point.place.trim() !== '')
-    if (!route.supported || stops.length === 0) return [{ from, to, arrive }]
+    const hours = routeHours(legs, from, stops, to)
+    if (hours === null) return null
 
-    const result = []
-    let previous = from
-    for (const stop of stops) {
-      result.push({ from: previous, to: stop.place, arrive: stop.arrive })
-      previous = stop.place
-    }
-    result.push({ from: previous, to, arrive })
-    return result
-  }, [route, values, waypoints])
+    const departureField = fields.find((item) => item.kind === 'departure')
+    const moment = parseDeadline(departureField ? (values[departureField.col] ?? '') : '')
+      ?? parseDeadline(dateValue(fields, values))
+    if (!moment) return null
 
-  /** Число — это про рейс целиком: в плечах повторять его нельзя. */
-  const isNumeric = (value: string) => /^-?[\d\s.,]+$/.test(value.trim())
+    return { text: formatMoment(new Date(moment.getTime() + hours * 3600 * 1000)), hours }
+  }, [routeCols, values, waypoints, fields, legs])
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
     if (!filled) return
-    if (plan.target + legs.length > MAX_ROWS) return
+    if (plan.target >= MAX_ROWS) return
+
+    const row = plan.target
+    const stops = waypoints.map((point) => point.place.trim()).filter(Boolean)
+    const via = viaColumn(sheet)
 
     doc.transact(() => {
-      if (plan.insert) {
-        // Каждая вставка сдвигает итог ниже и расширяет его формулы.
-        for (let i = 0; i < legs.length; i += 1) insertRow(doc, sheet, plan.target)
-      }
-      const needed = plan.target + legs.length - rowCount(sheet)
-      if (needed > 0) growRows(doc, sheet, needed)
+      if (plan.insert) insertRow(doc, sheet, row)
+      if (row >= rowCount(sheet)) growRows(doc, sheet, row - rowCount(sheet) + 1)
 
-      legs.forEach((leg, index) => {
-        const row = plan.target + index
-        const first = index === 0
-
-        for (const item of fields) {
-          if (item.kind === 'from') {
-            if (leg.from.trim()) writeCell(doc, sheet, row, item.col, leg.from.trim())
-            continue
-          }
-          if (item.kind === 'to') {
-            if (leg.to.trim()) writeCell(doc, sheet, row, item.col, leg.to.trim())
-            continue
-          }
-          if (item.kind === 'deadline' && route.arrive?.col === item.col) {
-            if (leg.arrive.trim()) writeCell(doc, sheet, row, item.col, leg.arrive.trim())
-            continue
-          }
-          // Время выезда известно только для первого плеча: когда машина
-          // тронулась с промежуточной точки, никто не записывает.
-          if (item.kind === 'departure' && !first) continue
-          if (summed.has(item.col) && !first) continue
-
-          if (item.kind === 'formula') {
-            writeCell(
-              doc, sheet, row, item.col,
-              shiftFormulaToRow(item.formula ?? '', plan.sample, row),
-            )
-            continue
-          }
-
-          const value = (values[item.col] ?? '').trim()
-          if (!value) continue
-          if (!first && isNumeric(value)) continue
-          writeCell(doc, sheet, row, item.col, value)
+      for (const item of fields) {
+        if (item.kind === 'formula') {
+          writeCell(
+            doc, sheet, row, item.col,
+            shiftFormulaToRow(item.formula ?? '', plan.sample, row),
+          )
+          continue
         }
-      })
+
+        // Срок прибытия: если не вписан руками, ставим расчётный по маршруту.
+        if (routeCols.arrive?.col === item.col) {
+          const typed = (values[item.col] ?? '').trim()
+          const value = typed || plannedArrival?.text || ''
+          if (value) writeCell(doc, sheet, row, item.col, value)
+          continue
+        }
+
+        const value = (values[item.col] ?? '').trim()
+        if (value) writeCell(doc, sheet, row, item.col, value)
+      }
+
+      // Точки по пути — отдельной колонкой, одной записью: «Кашгар → Нарын».
+      if (via !== null && stops.length > 0) {
+        writeCell(doc, sheet, row, via, formatVia(stops))
+      }
     })
 
     onAdded(plan.target)
@@ -276,12 +269,21 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
     <div className="mb-4 rounded-xl border border-hairline p-3">
       <span className="mb-2 block text-sm font-medium text-ink">Маршрут</span>
 
+      {/* Подсказка из общего справочника: те же точки, между которыми
+          известно время в пути. Своё название вписать никто не мешает. */}
+      <datalist id="route-places">
+        {placeNames.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+
       <label className="mb-3 block">
-        <span className="mb-1 block text-sm text-ink-muted">{route.from?.label}</span>
+        <span className="mb-1 block text-sm text-ink-muted">{routeCols.from?.label}</span>
         <input
-          value={route.from ? (values[route.from.col] ?? '') : ''}
+          value={routeCols.from ? (values[routeCols.from.col] ?? '') : ''}
           autoFocus
-          onChange={(event) => route.from && set(route.from.col, event.target.value)}
+          list="route-places"
+          onChange={(event) => routeCols.from && set(routeCols.from.col, event.target.value)}
           className={fieldClass}
         />
       </label>
@@ -302,26 +304,16 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
           <input
             value={point.place}
             placeholder="Пункт"
+            list="route-places"
             onChange={(event) => setWaypoint(index, { place: event.target.value })}
-            className={`${fieldClass} mb-2`}
+            className={fieldClass}
           />
-          {route.arrive && (
-            <>
-              <input
-                value={point.arrive}
-                placeholder={`${route.arrive.label} — 14:00`}
-                onChange={(event) => setWaypoint(index, { arrive: event.target.value })}
-                className={fieldClass}
-              />
-              {deadlineHint(point.arrive)}
-            </>
-          )}
         </div>
       ))}
 
       <button
         type="button"
-        onClick={() => setWaypoints((current) => [...current, { place: '', arrive: '' }])}
+        onClick={() => setWaypoints((current) => [...current, { place: '' }])}
         className="mb-3 flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-sm hover:bg-surface-muted"
       >
         <PlusIcon size={15} />
@@ -329,31 +321,42 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
       </button>
 
       <label className="mb-3 block">
-        <span className="mb-1 block text-sm text-ink-muted">{route.to?.label}</span>
+        <span className="mb-1 block text-sm text-ink-muted">{routeCols.to?.label}</span>
         <input
-          value={route.to ? (values[route.to.col] ?? '') : ''}
-          onChange={(event) => route.to && set(route.to.col, event.target.value)}
+          value={routeCols.to ? (values[routeCols.to.col] ?? '') : ''}
+          list="route-places"
+          onChange={(event) => routeCols.to && set(routeCols.to.col, event.target.value)}
           className={fieldClass}
         />
       </label>
 
-      {route.arrive && (
+      {routeCols.arrive && (
         <label className="block">
-          <span className="mb-1 block text-sm text-ink-muted">{route.arrive.label}</span>
+          <span className="mb-1 block text-sm text-ink-muted">
+            {routeCols.arrive.label}
+            {/* Пустое поле заполнится само, если маршрут есть в справочнике. */}
+            {!(values[routeCols.arrive.col] ?? '').trim() && plannedArrival && (
+              <span className="ml-1 text-accent">
+                — посчитаем: {plannedArrival.text}
+              </span>
+            )}
+          </span>
           <input
-            value={values[route.arrive.col] ?? ''}
+            value={values[routeCols.arrive.col] ?? ''}
             placeholder="18:00 или 11.09.2026 18:00"
-            onChange={(event) => route.arrive && set(route.arrive.col, event.target.value)}
+            onChange={(event) => routeCols.arrive && set(routeCols.arrive.col, event.target.value)}
             className={fieldClass}
           />
-          {deadlineHint(values[route.arrive.col] ?? '')}
+          {deadlineHint(values[routeCols.arrive.col] ?? '')}
         </label>
       )}
 
       {waypoints.some((point) => point.place.trim() !== '') && (
         <p className="mt-3 text-xs text-ink-muted">
-          Получится строк: {legs.length} — по одной на участок пути. Суммы
-          встанут в первую, чтобы итог не сложил их несколько раз.
+          {viaColumn(sheet) === null
+            ? 'Точки по пути некуда записать: заведите в первой строке колонку «Через».'
+            : 'Рейс останется одной записью, точки по пути уйдут в колонку «Через».'}
+          {plannedArrival && ` Весь путь — ${plannedArrival.hours} ч.`}
         </p>
       )}
     </div>
@@ -372,8 +375,11 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
 
           // Маршрут показывается одним блоком на месте колонки «Откуда»;
           // «Куда» и срок прибытия входят в него же.
-          if (route.supported && item.kind === 'from') return <div key={item.col}>{routeBlock}</div>
-          if (route.supported && (item.kind === 'to' || route.arrive?.col === item.col)) return null
+          if (routeCols.supported && item.kind === 'from') return <div key={item.col}>{routeBlock}</div>
+          if (routeCols.supported
+            && (item.kind === 'to' || item.kind === 'via' || routeCols.arrive?.col === item.col)) {
+            return null
+          }
 
           if (item.kind === 'formula') {
             return (
@@ -409,7 +415,7 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
               <span className="mb-1 block text-sm text-ink-muted">{item.label}</span>
               <input
                 value={value}
-                autoFocus={index === 0 && !route.supported}
+                autoFocus={index === 0 && !routeCols.supported}
                 placeholder={item.kind === 'deadline' ? '18:00 или 11.09.2026 18:00' : undefined}
                 onChange={(event) => set(item.col, event.target.value)}
                 className={fieldClass}
@@ -434,7 +440,7 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
             disabled={!filled}
             className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {legs.length > 1 ? `Добавить ${legs.length} строки` : 'Добавить'}
+            Добавить
           </button>
         </div>
       </form>

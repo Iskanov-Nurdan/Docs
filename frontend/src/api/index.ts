@@ -9,7 +9,9 @@ import type {
   Notification,
   Paginated,
   Permission,
+  Place,
   Publication,
+  RouteLeg,
   ShareLink,
   Template,
   User,
@@ -85,6 +87,21 @@ export const api = {
   starDocument: (id: string) => request<{ is_starred: boolean }>(`/documents/${id}/star/`, { method: 'POST' }),
   documentActivity: (id: string) => request<unknown[]>(`/documents/${id}/activity/`),
   searchDocuments: (q: string) => request<DocumentSummary[]>('/documents/search/', { params: { q } }),
+
+  // --- Справочник маршрутов ---
+  listPlaces: () => request<Place[]>('/places/'),
+  createPlace: (body: { name: string; order?: number }) =>
+    request<Place>('/places/', { method: 'POST', body }),
+  updatePlace: (id: string, body: Partial<{ name: string; is_active: boolean; order: number }>) =>
+    request<Place>(`/places/${id}/`, { method: 'PATCH', body }),
+  deletePlace: (id: string) => request<void>(`/places/${id}/`, { method: 'DELETE' }),
+
+  listRouteLegs: () => request<RouteLeg[]>('/route-legs/'),
+  createRouteLeg: (body: { origin: string; destination: string; hours: number; note?: string }) =>
+    request<RouteLeg>('/route-legs/', { method: 'POST', body }),
+  updateRouteLeg: (id: string, body: Partial<{ hours: number; note: string }>) =>
+    request<RouteLeg>(`/route-legs/${id}/`, { method: 'PATCH', body }),
+  deleteRouteLeg: (id: string) => request<void>(`/route-legs/${id}/`, { method: 'DELETE' }),
 
   // --- Папки ---
   listFolders: () => request<Folder[]>('/folders/'),

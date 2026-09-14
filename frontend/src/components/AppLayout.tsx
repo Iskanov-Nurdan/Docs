@@ -16,6 +16,7 @@ import {
   LogoutIcon,
   MenuIcon,
   PlusIcon,
+  RouteIcon,
   UploadIcon,
   SearchIcon,
   SettingsIcon,
@@ -35,6 +36,7 @@ const SECTIONS = [
   { to: '/shared', label: 'Доступные мне', Icon: UsersIcon },
   { to: '/starred', label: 'Избранное', Icon: StarIcon },
   { to: '/templates', label: 'Шаблоны', Icon: TemplateIcon },
+  { to: '/routes', label: 'Точки и маршруты', Icon: RouteIcon },
   { to: '/trash', label: 'Корзина', Icon: TrashIcon },
 ]
 
@@ -64,6 +66,18 @@ export function AppLayout({ title, actions, children }: Props) {
   useEffect(() => {
     loadFolders()
   }, [loadFolders])
+
+  // Панель разделов на телефоне закрывается и клавишей: это привычно любому,
+  // кто работает с клавиатурой, а на планшете с чехлом — единственный способ
+  // закрыть её, не целясь пальцем в подложку.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [menuOpen])
 
   // Строка поиска — часть адреса: результат можно послать ссылкой,
   // а «Назад» возвращает к прежнему запросу.

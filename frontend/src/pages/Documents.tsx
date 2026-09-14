@@ -84,6 +84,10 @@ export function DocumentsPage({ scope }: { scope: DocumentsScope }) {
 
   const query = params.get('q') ?? ''
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
+  // Сколько всего таблиц у человека и сколько уже показано: без этого список
+  // обрывался на первой странице выдачи, и до остальных было не добраться.
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [ordering, setOrdering] = useState('-last_edited_at')
@@ -91,24 +95,55 @@ export function DocumentsPage({ scope }: { scope: DocumentsScope }) {
     () => (localStorage.getItem('docs.view') as ListView) ?? 'grid',
   )
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const response = await api.listDocuments({
+  const PAGE_SIZE = 60
+
+  const fetchPage = useCallback(
+    (page: number) =>
+      api.listDocuments({
         scope: query ? 'search' : scope === 'folder' ? 'active' : scope,
         q: query || undefined,
         folder: scope === 'folder' ? folderId : undefined,
         ordering,
-        page_size: 60,
-      })
+        page,
+        page_size: PAGE_SIZE,
+      }),
+    [scope, folderId, query, ordering],
+  )
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await fetchPage(1)
       setDocuments(response.results)
+      setTotal(response.count)
     } catch {
       setError('Не удалось загрузить документы')
     } finally {
       setLoading(false)
     }
-  }, [scope, folderId, query, ordering])
+  }, [fetchPage])
+
+  /** Следующая страница выдачи — по кнопке, а не по прокрутке. */
+  const loadMore = async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    try {
+      const next = Math.floor(documents.length / PAGE_SIZE) + 1
+      const response = await fetchPage(next)
+      // Сверяем по идентификатору: пока человек читал список, одна из таблиц
+      // могла уехать в корзину, и тогда страницы сдвигаются.
+      setDocuments((current) => {
+        const seen = new Set(current.map((item) => item.id))
+        return [...current, ...response.results.filter((item) => !seen.has(item.id))]
+      })
+      setTotal(response.count)
+    } catch {
+      setError('Не удалось загрузить документы')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   useEffect(() => {
     load()
@@ -221,8 +256,30 @@ export function DocumentsPage({ scope }: { scope: DocumentsScope }) {
                 : prev.map((item) => (item.id === document.id ? document : item)),
             )
           }
-          onRemove={(id) => setDocuments((prev) => prev.filter((item) => item.id !== id))}
+          onRemove={(id) => {
+            setDocuments((prev) => prev.filter((item) => item.id !== id))
+            setTotal((count) => Math.max(count - 1, 0))
+          }}
         />
+      )}
+
+      {/* Кнопка, а не подгрузка при прокрутке: в длинном списке человек чаще
+          ищет поиском, а самопроизвольная догрузка на телефоне мешает
+          добраться до конца страницы. */}
+      {!loading && documents.length > 0 && documents.length < total && (
+        <div className="mt-4 flex flex-col items-center gap-1">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="rounded-full border border-hairline px-4 py-2 text-sm text-ink hover:bg-surface-muted disabled:opacity-50"
+          >
+            {loadingMore ? 'Загружаем…' : 'Показать ещё'}
+          </button>
+          <span className="text-xs text-ink-muted">
+            Показано {documents.length} из {total}
+          </span>
+        </div>
       )}
     </AppLayout>
   )

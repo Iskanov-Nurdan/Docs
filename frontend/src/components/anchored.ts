@@ -43,14 +43,20 @@ export function useAnchoredPosition(
     const rect = element.getBoundingClientRect()
     const { innerWidth: width, innerHeight: height } = window
 
-    const below = height - rect.bottom - GAP - EDGE
-    const above = rect.top - GAP - EDGE
+    // Кнопка может оказаться выше или ниже видимой части — тогда «места
+    // снизу» насчиталось бы больше, чем сам экран. Ограничиваем окном.
+    const below = Math.min(height - rect.bottom, height) - GAP - EDGE
+    const above = Math.min(rect.top, height) - GAP - EDGE
     // Вниз — если там помещается или всё равно просторнее, чем вверху.
     const dropDown = below >= MIN_SPACE || below >= above
 
     const next: React.CSSProperties = {
       position: 'fixed',
-      maxHeight: Math.max((dropDown ? below : above), MIN_SPACE),
+      // Ровно столько, сколько есть с выбранной стороны. Раньше здесь стоял
+      // нижний предел, и длинный список — два десятка точек маршрута —
+      // вылезал за край экрана: нижние пункты нельзя было ни увидеть, ни
+      // нажать. Не поместившееся прокручивается внутри слоя.
+      maxHeight: Math.max(dropDown ? below : above, 96),
       zIndex: 60,
     }
     if (matchWidth) next.minWidth = rect.width

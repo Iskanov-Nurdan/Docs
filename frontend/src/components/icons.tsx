@@ -235,6 +235,16 @@ export function ChartIcon(props: IconProps) {
   )
 }
 
+export function RouteIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="6" cy="18" r="2.5" />
+      <circle cx="18" cy="6" r="2.5" />
+      <path d="M8.5 18h5a4 4 0 0 0 0-8h-3a4 4 0 0 1 0-8h5" strokeDasharray="0" />
+    </Icon>
+  )
+}
+
 export function DownloadIcon(props: IconProps) {
   return (
     <Icon {...props}>

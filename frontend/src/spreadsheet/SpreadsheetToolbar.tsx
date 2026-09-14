@@ -4,9 +4,11 @@ import {
   AlignLeftIcon,
   AlignRightIcon,
   ChartIcon,
+  CheckIcon,
   ColumnIcon,
   EraserIcon,
   PinIcon,
+  RouteIcon,
   PlusIcon,
   RedoIcon,
   RowIcon,
@@ -53,6 +55,10 @@ type Props = {
   headerFrozen: boolean
   onToggleFreeze: () => void
   onCharts: () => void
+  /** Отметить прибытие машины в строке под курсором. */
+  onArrived: () => void
+  /** Посчитать сроки прибытия по всей таблице. */
+  onFillArrivals: () => void
 }
 
 export function SpreadsheetToolbar({
@@ -71,6 +77,8 @@ export function SpreadsheetToolbar({
   headerFrozen,
   onToggleFreeze,
   onCharts,
+  onArrived,
+  onFillArrivals,
 }: Props) {
   const disabled = !editable
 
@@ -159,6 +167,32 @@ export function SpreadsheetToolbar({
       />
 
       {divider}
+
+      {/* Журнал часто заполняют раньше, чем заводят справочник маршрутов:
+          эта кнопка проставляет сроки задним числом, там где они пусты. */}
+      <ToolbarButton
+        label={<RouteIcon size={17} />}
+        title="Посчитать сроки прибытия по справочнику"
+        disabled={disabled}
+        onClick={onFillArrivals}
+      />
+
+      {/* Приёмка — второе по частоте действие после добавления: машина
+          приехала, и это надо отметить в одно нажатие, а не набирать
+          статус, имя и время по трём ячейкам. */}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onArrived}
+        title="Отметить прибытие машины в текущей строке"
+        className={[
+          'flex shrink-0 items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5',
+          'text-sm text-ink hover:bg-surface-muted disabled:opacity-40',
+        ].join(' ')}
+      >
+        <CheckIcon size={16} />
+        Прибыл
+      </button>
 
       {/* Кнопка со словом, а не значком: это главный способ добавить запись,
           и искать её среди одинаковых значков человек не должен. */}

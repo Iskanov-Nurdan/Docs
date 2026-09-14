@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     "apps.versions",
     "apps.notifications",
     "apps.doc_templates",
+    "apps.routes",
     "apps.files",
     "apps.publishing",
 ]

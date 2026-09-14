@@ -20,6 +20,7 @@ import {
   colWidth,
   formatValue,
   colorRules,
+  columnsWithFilter,
   frozen,
   hiddenRows,
   lastFilledRow,
@@ -31,7 +32,9 @@ import {
   setColWidth,
 } from './model'
 import { bounds, cellAt, contains, type Cell, type Selection } from './selection'
+import { formatVia, isRoutePointColumn, parseVia, viaColumn } from './routing'
 import { deadlineTone, isDeadlineHeader, isSettled, parseDeadline, statusTone } from './statuses'
+import { useRoutes } from '@/store/routes'
 import { useIsDarkTheme } from '@/utils/theme'
 
 type Props = {
@@ -50,6 +53,9 @@ type Props = {
   /** Ячейки, найденные поиском по листу: подсвечиваются все сразу. */
   matches?: { row: number; col: number }[]
 }
+
+/** Пустой набор скрытых строк — общий, чтобы не плодить объекты. */
+const EMPTY_ROWS: Set<number> = new Set()
 
 const OVERSCAN = 6
 
@@ -140,6 +146,8 @@ export function Grid({
   const colStripRef = useRef<HTMLDivElement>(null)
   const rowStripRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Правка уже записана: защита от повторного завершения при потере фокуса.
+  const finished = useRef(false)
 
   const [viewport, setViewport] = useState({ top: 0, left: 0, height: 600, width: 800 })
   const [editing, setEditing] = useState<{ row: number; col: number; value: string } | null>(null)
@@ -179,33 +187,50 @@ export function Grid({
     [sheet, evaluator],
   )
 
-  /** Строки, скрытые фильтром. Считаем по заполненной части листа. */
-  const hidden = useMemo(
-    () => hiddenRows(sheet, displayAt, Math.min(lastFilledRow(sheet), rows - 1)),
+  /**
+   * Строки, скрытые фильтром.
+   *
+   * Без фильтра не делаем ничего: поиск последней заполненной строки обходит
+   * всю книгу, и на полсотни тысяч строк это полторы сотни миллисекунд — на
+   * каждое нажатие клавиши. Пока отбор не включён, скрывать нечего.
+   */
+  const hidden = useMemo(() => {
+    if (columnsWithFilter(sheet).length === 0) return EMPTY_ROWS
+    return hiddenRows(sheet, displayAt, Math.min(lastFilledRow(sheet), rows - 1))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sheet, version, rows, displayAt],
-  )
+  }, [sheet, version, rows, displayAt])
 
   /**
-   * Смещение каждой строки сверху.
+   * Смещения строк сверху.
    *
-   * Скрытая строка занимает ноль: соседние смыкаются, и между ними не остаётся
-   * пустой полосы. Считать положение умножением номера на высоту больше
-   * нельзя — отсюда и массив, как у столбцов.
+   * Пока фильтра нет — а это обычная работа — положение строки считается
+   * умножением, без единого массива. Это важно для больших журналов: держать
+   * и пересчитывать массив на сотню тысяч строк ради умножения на 24 незачем.
+   *
+   * Как только фильтр включён, скрытые строки занимают ноль, соседние
+   * смыкаются, и умножение уже не годится — тогда строится таблица смещений.
    */
   const rowTops = useMemo(() => {
-    const list = [0]
+    if (hidden.size === 0) return null
+    const list = new Int32Array(rows + 1)
     for (let row = 0; row < rows; row += 1) {
-      list.push(list[row] + (hidden.has(row) ? 0 : ROW_HEIGHT))
+      list[row + 1] = list[row] + (hidden.has(row) ? 0 : ROW_HEIGHT)
     }
     return list
   }, [rows, hidden])
 
-  const rowHeightAt = (row: number) => (hidden.has(row) ? 0 : ROW_HEIGHT)
-  const totalHeight = rowTops[rows]
+  const rowTop = useCallback(
+    (row: number) => (rowTops ? rowTops[Math.max(0, Math.min(row, rows))] : row * ROW_HEIGHT),
+    [rowTops, rows],
+  )
 
-  /** Номер строки по смещению сверху: двоичный поиск по тем же смещениям. */
+  const rowHeightAt = (row: number) => (hidden.has(row) ? 0 : ROW_HEIGHT)
+  const totalHeight = rowTop(rows)
+
+  /** Номер строки по смещению сверху. */
   const rowAtOffset = useCallback((offset: number) => {
+    if (!rowTops) return Math.max(0, Math.floor(offset / ROW_HEIGHT))
+
     let low = 0
     let high = rowTops.length - 2
     while (low < high) {
@@ -219,8 +244,55 @@ export function Grid({
   // Закрепление: эти строки и столбцы не уезжают при прокрутке.
   const freeze = useMemo(() => frozen(sheet), [sheet, version])
 
-  /** Допустимые значения столбца, который сейчас правят. */
-  const choices = editing && editing.row > 0 ? validation(sheet, editing.col) : null
+  const places = useRoutes((state) => state.places)
+
+  /**
+   * Что предложить на выбор в ячейке, которую сейчас правят.
+   *
+   * Свой список столбца — главнее: его завели под эту таблицу. Если его нет,
+   * а столбец называется «Откуда» или «Куда», подставляем точки из общего
+   * справочника — те самые, между которыми известно время в пути.
+   */
+  const choices = useMemo(() => {
+    if (!editing || editing.row <= 0) return null
+
+    const own = validation(sheet, editing.col)
+    if (own) return own
+
+    if (places.length > 0 && isRoutePointColumn(sheet, editing.col)) {
+      return places.map((place) => place.name)
+    }
+    return null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sheet, version, places])
+
+  /**
+   * Точки по пути: выбор сразу нескольких.
+   *
+   * Через одну точку рейс идёт редко — обычно это Кашгар, потом Нарын, потом
+   * граница. Одиночный список заставлял бы дописывать стрелки руками, поэтому
+   * здесь галочки, а ячейка собирается из отмеченного.
+   */
+  const viaChoices = useMemo(() => {
+    if (!editing || editing.row <= 0 || places.length === 0) return null
+    if (viaColumn(sheet) !== editing.col) return null
+    return places.map((place) => place.name)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sheet, version, places])
+
+  const viaSelected = useMemo(
+    () => new Set(editing ? parseVia(editing.value) : []),
+    [editing],
+  )
+
+  const toggleVia = (name: string) => {
+    if (!editing) return
+    const chosen = parseVia(editing.value)
+    const next = chosen.includes(name)
+      ? chosen.filter((item) => item !== name)
+      : [...chosen, name]
+    setEditing({ ...editing, value: formatVia(next) })
+  }
 
   // Свои правила подсветки. Пустой список — обычная работа без них.
   const rules = useMemo(() => colorRules(sheet), [sheet, version])
@@ -275,6 +347,7 @@ export function Grid({
   const startEditing = useCallback(
     (row: number, col: number, initial?: string) => {
       if (!editable) return
+      finished.current = false
       setEditing({ row, col, value: initial ?? readRaw(sheet, row, col) ?? '' })
     },
     [editable, sheet],
@@ -291,9 +364,20 @@ export function Grid({
     if (editing) inputRef.current?.focus()
   }, [editing])
 
-  const finishEditing = (move: 'down' | 'right' | 'none' = 'none') => {
-    if (!editing) return
-    onCommit(editing.row, editing.col, editing.value)
+  /**
+   * Закрывает правку и записывает значение.
+   *
+   * `value` передаётся, когда значение выбрано из списка: записать его
+   * отдельным вызовом нельзя — уход фокуса из поля тут же вызывал бы это же
+   * завершение с пустым содержимым поля и затирал бы выбранное.
+   */
+  const finishEditing = (move: 'down' | 'right' | 'none' = 'none', value?: string) => {
+    if (!editing || finished.current) return
+    // Закрытие поля само вызывает это завершение ещё раз — уже с пустым
+    // содержимым и со старым значением в замыкании. Без отметки выбранное
+    // из списка тут же затиралось пустотой.
+    finished.current = true
+    onCommit(editing.row, editing.col, value ?? editing.value)
     setEditing(null)
 
     if (move === 'down') selectCell(Math.min(editing.row + 1, rows - 1), editing.col)
@@ -354,7 +438,7 @@ export function Grid({
     const element = scrollRef.current
     if (!element) return
 
-    const top = rowTops[row]
+    const top = rowTop(row)
     const height = rowHeightAt(row)
     if (top < element.scrollTop) element.scrollTop = top
     else if (top + height > element.scrollTop + element.clientHeight) {
@@ -591,7 +675,7 @@ export function Grid({
    * можно щёлкнуть, выделить и править.
    */
   const cellTop = (row: number) =>
-    row < freeze.rows ? viewport.top + rowTops[row] : rowTops[row]
+    row < freeze.rows ? viewport.top + rowTop(row) : rowTop(row)
   const cellLeft = (col: number) =>
     col < freeze.cols ? viewport.left + offsets[col] : offsets[col]
   const cellLayer = (row: number, col: number) => {
@@ -627,8 +711,16 @@ export function Grid({
               >
                 {colLabel(col)}
                 {/* Действия столбца — рядом с его буквой: сортировка,
-                    фильтр, список значений, своё правило подсветки. */}
-                <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                    фильтр, список значений, своё правило подсветки.
+
+                    Нажатие не должно дойти до заголовка: тот выделяет весь
+                    столбец до последней строки, а выделение последней строки
+                    растит лист на сотню строк и уводит прокрутку вниз. */}
+                <span
+                  className="absolute right-2 top-1/2 -translate-y-1/2"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
                   <ColumnTools
                     doc={doc}
                     sheet={sheet}
@@ -773,10 +865,10 @@ export function Grid({
               aria-hidden="true"
               className="pointer-events-none absolute border-2 border-accent"
               style={{
-                top: rowTops[rect.top],
+                top: rowTop(rect.top),
                 left: offsets[rect.left],
                 width: offsets[rect.right + 1] - offsets[rect.left],
-                height: rowTops[Math.min(rect.bottom + 1, rows)] - rowTops[rect.top],
+                height: rowTop(Math.min(rect.bottom + 1, rows)) - rowTop(rect.top),
               }}
             />
 
@@ -817,7 +909,60 @@ export function Grid({
             {/* Выбор из списка значений: столбцу задали набор допустимых,
                 и статус теперь не набирают, а выбирают — без опечаток,
                 из-за которых строка не красится. */}
-            {editing && choices && (
+            {editing && viaChoices && (
+              <div
+                className="absolute z-20 max-h-56 w-56 overflow-y-auto rounded-xl border border-hairline bg-surface py-1 shadow-lg"
+                style={{
+                  top: cellTop(editing.row) + ROW_HEIGHT,
+                  left: cellLeft(editing.col),
+                }}
+                // Нажатие не должно доходить до сетки: она переносит выделение
+                // и закрывает правку, не дав отметить вторую точку.
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <div className="px-3 py-1 text-xs text-ink-muted">
+                  Точки по пути — отметьте нужные
+                </div>
+                {viaChoices.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onPointerDown={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      toggleVia(name)
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-ink hover:bg-surface-muted"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        'flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]',
+                        viaSelected.has(name)
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-hairline',
+                      ].join(' ')}
+                    >
+                      {viaSelected.has(name) ? '✓' : ''}
+                    </span>
+                    {name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    finishEditing()
+                  }}
+                  className="mt-1 w-full border-t border-hairline px-3 py-2 text-left text-sm font-medium text-accent"
+                >
+                  Готово
+                </button>
+              </div>
+            )}
+
+            {editing && !viaChoices && choices && (
               <div
                 className="absolute z-20 max-h-48 min-w-32 overflow-y-auto rounded-xl border border-hairline bg-surface py-1 shadow-lg"
                 style={{
@@ -830,13 +975,19 @@ export function Grid({
                   <button
                     key={choice}
                     type="button"
-                    // Нажатие мышью иначе сначала уводит фокус из поля, правка
-                    // закрывается, и клик попадает уже по пустому месту.
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      onCommit(editing.row, editing.col, choice)
-                      setEditing(null)
-                      scrollRef.current?.focus()
+                    /**
+                     * Записываем на нажатии указателя и гасим событие.
+                     *
+                     * Сетка слушает pointerdown и на любое нажатие переносит
+                     * выделение, закрывая правку. Её обработчик срабатывает
+                     * раньше щелчка по кнопке, поэтому выбор из списка
+                     * «проваливался» в таблицу: курсор прыгал на другую
+                     * строку, а значение не записывалось вовсе.
+                     */
+                    onPointerDown={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      finishEditing('none', choice)
                     }}
                     className="block w-full px-3 py-1.5 text-left text-sm text-ink hover:bg-surface-muted"
                   >

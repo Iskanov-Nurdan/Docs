@@ -15,6 +15,7 @@ import { SheetFind } from './SheetFind'
 import { SheetTabs } from './SheetTabs'
 import { AddRowDialog } from './AddRowDialog'
 import { ChartsDialog } from './ChartsDialog'
+import { affectsArrival, fillAllArrivals, fillArrival, passCheckpoint } from './routing'
 import { SpreadsheetToolbar } from './SpreadsheetToolbar'
 import { Evaluator, cellRef } from './formula'
 import {
@@ -42,7 +43,11 @@ import {
   renameSheet,
   rowCount,
   serializeBook,
+  DELIVERED_SHEET,
   frozen,
+  lastFilledRow,
+  markArrived,
+  moveRowToSheet,
   seedBook,
   setFrozen,
   sheetAt,
@@ -50,6 +55,7 @@ import {
   writeCell,
 } from './model'
 import { bounds, cellAt, cells as cellsOfSelection, label, type Cell, type Selection } from './selection'
+import { useRoutes } from '@/store/routes'
 
 type Props = {
   document: Document
@@ -65,6 +71,8 @@ type Props = {
 export function SpreadsheetEditor(props: Props) {
   const { document: doc, token, linkToken, user, onStatusChange, onPresenceChange, onEvent } = props
   const [provider, setProvider] = useState<DocumentProvider | null>(null)
+  // Книга готова к показу: местная копия поднята, серверное состояние пришло.
+  const [ready, setReady] = useState(false)
 
   // Снимок для сервера берётся из документа Yjs, а он появляется вместе
   // с провайдером — ссылка разрывает эту зависимость по кругу.
@@ -86,10 +94,53 @@ export function SpreadsheetEditor(props: Props) {
       // Таблица из шаблона и книга, перенесённая из файла, лежат в базе
       // обычным JSON. Если состояния Yjs ещё нет, переносим их в книгу —
       // иначе документ открывается пустым, хотя содержимое у него есть.
+      /**
+       * Книга создаётся только здесь — когда пришло и местное состояние,
+       * и серверное.
+       *
+       * Раньше пустой лист заводился сразу при открытии. Сохранённое
+       * состояние приходило следом со своим листом, CRDT складывал оба, и
+       * при каждом открытии в книге появлялся ещё один «Лист1»: данные на
+       * одном, а человек смотрел на пустой соседний.
+       */
       onReady: (hasState) => {
         const target = bookRef.current
-        if (!target || hasState || !isBookEmpty(target)) return
-        if (seedBook(target, doc.content)) instance.flush()
+        if (!target) return
+
+        if (!hasState) {
+          // Состояния на сервере нет — ждать нечего. Таблица из шаблона и
+          // книга, перенесённая из файла, лежат в базе обычным JSON:
+          // переносим их, иначе документ открылся бы пустым.
+          if (isBookEmpty(target) && seedBook(target, doc.content)) instance.flush()
+          ensureBook(target)
+          setReady(true)
+          return
+        }
+
+        // Сервер сообщил, что книга у него есть, но приходит она следующими
+        // сообщениями. Свой лист сейчас создавать нельзя: он сложился бы
+        // с пришедшим, и в книге оказалось бы два «Лист1».
+        const shown = () => {
+          if (book(target).length === 0) return false
+          setReady(true)
+          return true
+        }
+
+        if (shown()) return
+
+        const onUpdate = () => {
+          if (shown()) target.off('update', onUpdate)
+        }
+        target.on('update', onUpdate)
+
+        // Если состояние так и не пришло (сервер знал о нём, но прислать не
+        // смог), через несколько секунд открываем пустую книгу — лучше, чем
+        // бесконечное «Подключение…».
+        window.setTimeout(() => {
+          target.off('update', onUpdate)
+          ensureBook(target)
+          setReady(true)
+        }, 5000)
       },
     })
     bookRef.current = instance.doc
@@ -102,11 +153,12 @@ export function SpreadsheetEditor(props: Props) {
       window.removeEventListener('beforeunload', flush)
       instance.destroy()
       setProvider(null)
+      setReady(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id, token, linkToken])
 
-  if (!provider) {
+  if (!provider || !ready) {
     return (
       <p className="p-12 text-center text-ink-muted" role="status">
         Подключение к таблице…
@@ -117,7 +169,7 @@ export function SpreadsheetEditor(props: Props) {
   return <Workbook {...props} provider={provider} />
 }
 
-function Workbook({ mode, provider }: Props & { provider: DocumentProvider }) {
+function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider }) {
   const doc = provider.doc
   const editable = mode === 'editing'
 
@@ -129,11 +181,15 @@ function Workbook({ mode, provider }: Props & { provider: DocumentProvider }) {
   const [finding, setFinding] = useState(false)
   const [adding, setAdding] = useState(false)
   const [charting, setCharting] = useState(false)
+  // Что заполнила отметка о приёмке: показывается на пару секунд, чтобы было
+  // видно, что нажатие сработало и куда именно оно записало.
+  const [arrival, setArrival] = useState('')
+  // Справочник точек и времени в пути: по нему таблица сама ставит срок.
+  const { legs, load: loadRoutes } = useRoutes()
+  useEffect(() => {
+    loadRoutes()
+  }, [loadRoutes])
   const [matches, setMatches] = useState<CellHit[]>([])
-
-  // Книга должна существовать до первой отрисовки сетки: пустой массив листов
-  // не из чего рисовать.
-  useMemo(() => ensureBook(doc), [doc])
 
   useEffect(() => {
     const bump = () => setVersion((value) => value + 1)
@@ -304,7 +360,66 @@ function Workbook({ mode, provider }: Props & { provider: DocumentProvider }) {
           editable && setFrozen(doc, sheet, { rows: frozen(sheet).rows > 0 ? 0 : 1 })
         }
         onCharts={() => setCharting(true)}
+        onFillArrivals={() => {
+          if (!editable) return
+          const { filled, reasons } = fillAllArrivals(doc, sheet, legs, lastFilledRow(sheet))
+          const main = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]
+          setArrival(
+            filled > 0
+              ? `Посчитано сроков: ${filled}`
+              : `Считать нечего${main ? `: ${main[0]} (${main[1]} строк)` : ''}`,
+          )
+          window.setTimeout(() => setArrival(''), 6000)
+        }}
+        onArrived={() => {
+          if (!editable) return
+          const row = rect.top
+
+          /**
+           * Сначала — точки по пути.
+           *
+           * Рейс с промежуточными точками закрывается не разом: сперва
+           * отмечают, что машина прошла Кара-Тай, и только потом — что она
+           * доехала. Пока непройденные точки есть, кнопка отмечает ближайшую.
+           */
+          const step = passCheckpoint(doc, sheet, row, user.name, legs)
+          if (step.kind === 'checkpoint') {
+            setArrival(
+              `Прошли ${step.place}. Дальше: ${step.left.join(' → ')}`
+              + (step.arrival ? `, прибытие ${step.arrival}` : ''),
+            )
+            window.setTimeout(() => setArrival(''), 7000)
+            return
+          }
+
+          const filled = markArrived(doc, sheet, row, user.name)
+          if (filled.length === 0) {
+            setArrival('Отмечать нечего: нет колонки «Статус». Назовите так колонку в первой строке.')
+            window.setTimeout(() => setArrival(''), 6000)
+            return
+          }
+
+          // Прибывший рейс уезжает на свой лист: в рабочем журнале остаётся
+          // только то, что ещё в пути. Так же это разносят по вкладкам в
+          // обычных таблицах, только вручную.
+          const landed = sheets[index]?.name === DELIVERED_SHEET
+            ? -1
+            : moveRowToSheet(doc, sheet, row, DELIVERED_SHEET)
+
+          setArrival(
+            landed >= 0
+              ? `Принято (${filled.join(', ')}) и перенесено на лист «${DELIVERED_SHEET}», строка ${landed + 1}`
+              : `Строка ${row + 1}: отмечено прибытие (${filled.join(', ')})`,
+          )
+          window.setTimeout(() => setArrival(''), 6000)
+        }}
       />
+
+      {arrival && (
+        <p role="status" className="border-b border-hairline bg-surface-muted px-3 py-1.5 text-xs text-ink-muted">
+          {arrival}
+        </p>
+      )}
 
       {/* Строка адреса и формул */}
       <div className="flex items-center gap-2 border-b border-hairline bg-surface px-3 py-1.5">
@@ -388,7 +503,34 @@ function Workbook({ mode, provider }: Props & { provider: DocumentProvider }) {
         editable={editable}
         selection={selection}
         onSelectionChange={changeSelection}
-        onCommit={(row, col, raw) => editable && writeCell(doc, sheet, row, col, raw)}
+        onCommit={(row, col, raw) => {
+          if (!editable) return
+          writeCell(doc, sheet, row, col, raw)
+
+          // Заполнили «Куда» или время выезда — срок прибытия таблица
+          // посчитает сама по справочнику. Уже проставленный срок не трогаем:
+          // договорённость с водителем важнее норматива.
+          if (!affectsArrival(sheet, col)) return
+          const result = fillArrival(doc, sheet, row, legs)
+
+          // Не посчиталось из-за незаведённого участка — говорим, какого
+          // именно: точки-то человек выбрал, и молчание выглядит поломкой.
+          if (result.kind === 'skip' && result.reason === 'нет плеча' && result.detail) {
+            setArrival(
+              `Срок не посчитать: в «Точках и маршрутах» нет участка ${result.detail}.`
+              + ' Заведите его — и время встанет само.',
+            )
+            window.setTimeout(() => setArrival(''), 8000)
+            return
+          }
+          if (result.kind === 'written') {
+            setArrival(
+              `Строка ${row + 1}: прибытие ${result.text} — ${result.hours} ч в пути`
+              + (result.fromNow ? ' (отсчёт от текущего времени: дата выезда не заполнена)' : ''),
+            )
+            window.setTimeout(() => setArrival(''), 6000)
+          }
+        }}
         onClear={(list: Cell[]) => editable && clearCells(doc, sheet, list)}
         onPaste={handlePaste}
         editRequest={editRequest}

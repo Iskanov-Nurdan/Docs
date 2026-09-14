@@ -5,6 +5,7 @@
  * уйти табуляцией на страницу под ним — он не увидел бы, куда попал фокус.
  */
 import { useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { CloseIcon } from './icons'
 
 type Props = {
@@ -24,6 +25,20 @@ export function Modal({ title, onClose, children, footer, width = 'md' }: Props)
   const dialog = useRef<HTMLDivElement>(null)
   // Куда вернуть фокус после закрытия — иначе он улетает в начало страницы.
   const opener = useRef<Element | null>(null)
+
+  // Escape слушаем на всей странице, а не только внутри окна: фокус может
+  // оказаться снаружи — например, после выбора в списке, который рисуется
+  // отдельным слоем, — и тогда окно переставало закрываться клавишей.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   useEffect(() => {
     opener.current = document.activeElement
@@ -60,7 +75,16 @@ export function Modal({ title, onClose, children, footer, width = 'md' }: Props)
     [onClose],
   )
 
-  return (
+  /**
+   * Окно рисуется в конце страницы, а не там, где его вызвали.
+   *
+   * `position: fixed` отсчитывается от окна браузера только до тех пор, пока
+   * ни один предок не имеет transform: такой предок создаёт свою систему
+   * координат, и окно съезжает внутрь него. Полоса с буквами столбцов как раз
+   * сдвигается трансформацией при прокрутке — окна, открытые из меню столбца,
+   * оказывались под таблицей и не нажимались.
+   */
+  return createPortal(
     <div
       className="animate-fade fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
       onMouseDown={(event) => {
@@ -97,6 +121,7 @@ export function Modal({ title, onClose, children, footer, width = 'md' }: Props)
 
         {footer && <div className="border-t border-hairline px-5 py-3">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

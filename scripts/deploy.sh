@@ -53,6 +53,20 @@ grep -q "^CSRF_TRUSTED_ORIGINS=.*https://$DOMAIN" .env || fail "В CSRF_TRUSTED_
 
 done_ "Настройки на месте: $DOMAIN"
 
+# Фронтенд приезжает собранным: сервер его не строит. Без этой папки nginx
+# отдавал бы пустоту, и человек видел бы белый экран вместо приложения.
+WEB_DIR="$(get WEB_DIR)"
+WEB_DIR="${WEB_DIR:-./web}"
+
+if [ ! -f "$WEB_DIR/index.html" ]; then
+  fail "В $WEB_DIR нет собранного фронтенда (index.html).
+  Соберите его на своей машине и положите сюда:
+      ./scripts/build-web.sh
+      rsync -az --delete web/ root@ЭТОТ-СЕРВЕР:$(pwd)/web/"
+fi
+
+done_ "Фронтенд на месте: $(find "$WEB_DIR" -type f | wc -l) файлов в $WEB_DIR"
+
 # --------------------------- Конфигурация nginx ---------------------------
 
 # Есть ли уже выпущенный сертификат. Проверяем в томе, а не на диске: файлы
@@ -78,7 +92,8 @@ fi
 
 # ------------------------------ Запуск служб ------------------------------
 
-step "Собираем образы и поднимаем службы"
+step "Собираем образ приложения и поднимаем службы"
+# Собирается только бэкенд: фронтенд уже готов и лежит в web/.
 $COMPOSE up -d --build
 
 step "Ждём, пока приложение ответит"
@@ -121,5 +136,7 @@ echo
 echo "  Первый пользователь заводится так:"
 echo "    $COMPOSE exec api python manage.py createsuperuser"
 echo
+echo "  Обновить фронт: ./scripts/build-web.sh на своей машине, затем"
+echo "                  rsync -az --delete web/ root@сервер:$(pwd)/web/"
 echo "  Журналы:        $COMPOSE logs -f api"
 echo "  Остановить:     $COMPOSE down"

@@ -74,13 +74,26 @@ export function Select<T extends string>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Выбранный пункт должен быть виден сразу: в длинном списке он может
-  // оказаться далеко внизу.
+  /**
+   * Выбранный пункт должен быть виден сразу: в длинном списке он может
+   * оказаться далеко внизу.
+   *
+   * Прокручиваем сам список, а не зовём scrollIntoView: список висит
+   * отдельным слоем поверх страницы, и браузер, стараясь показать пункт,
+   * уводил вниз всю страницу — форма под списком уезжала за край экрана.
+   */
   useEffect(() => {
     if (!open) return
-    list.current?.querySelector<HTMLElement>('[data-highlighted="true"]')?.scrollIntoView({
-      block: 'nearest',
-    })
+    const box = list.current
+    const item = box?.querySelector<HTMLElement>('[data-highlighted="true"]')
+    if (!box || !item) return
+
+    const top = item.offsetTop
+    const bottom = top + item.offsetHeight
+    if (top < box.scrollTop) box.scrollTop = top
+    else if (bottom > box.scrollTop + box.clientHeight) {
+      box.scrollTop = bottom - box.clientHeight
+    }
   }, [open, highlighted])
 
   const choose = (index: number) => {

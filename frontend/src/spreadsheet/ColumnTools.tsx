@@ -14,9 +14,11 @@ import { ChevronDownIcon } from '@/components/icons'
 import { colLabel } from './formula'
 import {
   type ColorRule,
+  type ColumnFilter,
   type SheetMap,
   colorRules,
   columnFilter,
+  filterAccepts,
   frozen,
   lastFilledRow,
   rowHasFormula,
@@ -98,7 +100,9 @@ export function ColumnTools({ doc, sheet, col, version, editable, display }: Pro
       onSelect: () => sortRows(doc, sheet, col, 'desc', range.from, range.to),
     },
     {
-      label: activeFilter ? 'Изменить фильтр…' : 'Фильтр…',
+      label: activeFilter
+        ? (activeFilter.kind === 'range' ? 'Изменить промежуток…' : 'Изменить фильтр…')
+        : 'Фильтр…',
       disabled: range.to < 1,
       onSelect: () => setDialog('filter'),
     },
@@ -141,7 +145,7 @@ export function ColumnTools({ doc, sheet, col, version, editable, display }: Pro
       {dialog === 'filter' && (
         <FilterDialog
           values={uniqueValues}
-          selected={activeFilter}
+          current={activeFilter}
           onApply={(next) => {
             setColumnFilter(doc, sheet, col, next)
             setDialog(null)
@@ -184,27 +188,57 @@ const FIELD =
 
 function FilterDialog({
   values,
-  selected,
+  current,
   onApply,
   onClose,
 }: {
   values: string[]
-  selected: string[] | null
-  onApply: (values: string[] | null) => void
+  current: ColumnFilter | null
+  onApply: (filter: ColumnFilter | null) => void
   onClose: () => void
 }) {
+  const [mode, setMode] = useState<'values' | 'range'>(current?.kind === 'range' ? 'range' : 'values')
+
   // Фильтра нет — значит показано всё: галочки стоят везде.
   const [checked, setChecked] = useState<Set<string>>(
-    () => new Set(selected ?? values),
+    () => new Set(current?.kind === 'values' ? current.values : values),
   )
+  const [from, setFrom] = useState(current?.kind === 'range' ? current.from : '')
+  const [to, setTo] = useState(current?.kind === 'range' ? current.to : '')
 
   const toggle = (value: string) =>
-    setChecked((current) => {
-      const next = new Set(current)
-      if (next.has(value)) next.delete(value)
-      else next.add(value)
-      return next
+    setChecked((next) => {
+      const updated = new Set(next)
+      if (updated.has(value)) updated.delete(value)
+      else updated.add(value)
+      return updated
     })
+
+  // Сколько строк останется — видно до нажатия, чтобы не применять вслепую.
+  const matching = useMemo(() => {
+    if (mode === 'values') return values.filter((value) => checked.has(value)).length
+    const filter: ColumnFilter = { kind: 'range', from, to }
+    return values.filter((value) => filterAccepts(filter, value)).length
+  }, [mode, values, checked, from, to])
+
+  const apply = () => {
+    if (mode === 'values') onApply({ kind: 'values', values: Array.from(checked) })
+    else if (!from.trim() && !to.trim()) onApply(null)
+    else onApply({ kind: 'range', from: from.trim(), to: to.trim() })
+  }
+
+  const tab = (value: 'values' | 'range', label: string) => (
+    <button
+      type="button"
+      onClick={() => setMode(value)}
+      className={[
+        'rounded-full px-3 py-1.5 text-sm',
+        mode === value ? 'bg-accent/10 font-medium text-accent' : 'text-ink-muted hover:bg-surface-muted',
+      ].join(' ')}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <Modal
@@ -230,7 +264,7 @@ function FilterDialog({
           </button>
           <button
             type="button"
-            onClick={() => onApply(Array.from(checked))}
+            onClick={apply}
             className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           >
             Применить
@@ -238,40 +272,86 @@ function FilterDialog({
         </div>
       }
     >
-      <div className="mb-2 flex gap-2 text-xs">
-        <button
-          type="button"
-          onClick={() => setChecked(new Set(values))}
-          className="text-accent hover:underline"
-        >
-          Выбрать все
-        </button>
-        <button
-          type="button"
-          onClick={() => setChecked(new Set())}
-          className="text-accent hover:underline"
-        >
-          Снять все
-        </button>
+      <div className="mb-3 flex gap-1">
+        {tab('values', 'По значениям')}
+        {tab('range', 'Промежуток')}
       </div>
 
-      <ul className="max-h-72 overflow-y-auto">
-        {values.map((value) => (
-          <li key={value}>
-            <label className="flex items-center gap-2 rounded px-1 py-1.5 text-sm hover:bg-surface-muted">
+      {mode === 'values' ? (
+        <>
+          <div className="mb-2 flex gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setChecked(new Set(values))}
+              className="text-accent hover:underline"
+            >
+              Выбрать все
+            </button>
+            <button
+              type="button"
+              onClick={() => setChecked(new Set())}
+              className="text-accent hover:underline"
+            >
+              Снять все
+            </button>
+          </div>
+
+          <ul className="max-h-64 overflow-y-auto">
+            {values.map((value) => (
+              <li key={value}>
+                <label className="flex items-center gap-2 rounded px-1 py-1.5 text-sm hover:bg-surface-muted">
+                  <input
+                    type="checkbox"
+                    checked={checked.has(value)}
+                    onChange={() => toggle(value)}
+                    className="h-4 w-4 shrink-0 accent-[rgb(var(--accent))]"
+                  />
+                  <span className="truncate text-ink">
+                    {value === '' ? <span className="text-ink-muted">(пустые)</span> : value}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <>
+          <p className="mb-3 text-sm text-ink-muted">
+            Отбор по времени, дате или числу. Можно заполнить одно поле:
+            только «от» — всё позднее, только «до» — всё раньше.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm text-ink-muted">От</span>
               <input
-                type="checkbox"
-                checked={checked.has(value)}
-                onChange={() => toggle(value)}
-                className="h-4 w-4 shrink-0 accent-[rgb(var(--accent))]"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+                placeholder="11.09.2026 или 100000"
+                className={FIELD}
               />
-              <span className="truncate text-ink">
-                {value === '' ? <span className="text-ink-muted">(пустые)</span> : value}
-              </span>
             </label>
-          </li>
-        ))}
-      </ul>
+            <label className="block">
+              <span className="mb-1 block text-sm text-ink-muted">До</span>
+              <input
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+                placeholder="14.09.2026 или 500000"
+                className={FIELD}
+              />
+            </label>
+          </div>
+
+          <p className="mt-3 text-xs text-ink-muted">
+            Дата без времени в поле «до» означает конец того дня — строка,
+            пришедшая в тот же день вечером, из отбора не выпадет.
+          </p>
+        </>
+      )}
+
+      <p className="mt-3 text-xs text-ink-muted">
+        Подойдёт значений: {matching} из {values.length}
+      </p>
     </Modal>
   )
 }
