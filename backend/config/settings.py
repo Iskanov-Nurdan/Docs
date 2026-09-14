@@ -45,6 +45,16 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
 
+# Свой адрес разрешён всегда, каким бы ни был список имён.
+#
+# По нему стучится проверка здоровья контейнера: снаружи такой запрос не
+# сделать — только изнутри самой машины. Без этого контейнер с боевым доменом
+# в списке считался больным вечно: Django отвечал на «127.0.0.1:8000» отказом,
+# docker видел ошибку и не давал развернуться.
+for _own in ("127.0.0.1", "localhost", "[::1]"):
+    if _own not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_own)
+
 INSTALLED_APPS = [
     "daphne",  # раньше staticfiles: подменяет runserver на ASGI
     "django.contrib.admin",
