@@ -7,7 +7,9 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Y from 'yjs'
-import { tokens } from '@/api'
+import { ApiError, api, tokens } from '@/api'
+import { CloseIcon, UploadIcon } from '@/components/icons'
+import { SHEET_FILE_ACCEPT, isSheetFile } from '@/utils/files'
 import { DocumentProvider } from '@/websocket/provider'
 import type { Document, EditorMode, Presence, SaveStatus } from '@/types'
 import { Grid } from './Grid'
@@ -34,6 +36,7 @@ import {
   growCols,
   isBookEmpty,
   growRows,
+  importSheets,
   insertCol,
   insertRow,
   readRaw,
@@ -169,9 +172,15 @@ export function SpreadsheetEditor(props: Props) {
   return <Workbook {...props} provider={provider} />
 }
 
-function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider }) {
+function Workbook({ document: source, mode, provider, user }: Props & { provider: DocumentProvider }) {
   const doc = provider.doc
   const editable = mode === 'editing'
+
+  const filePicker = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  // Над таблицей тащат файл: показываем, что его можно отпустить.
+  const [dragging, setDragging] = useState(false)
 
   const [version, setVersion] = useState(0)
   const [active, setActive] = useState(0)
@@ -281,6 +290,55 @@ function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider
     setSelection({ anchor: { row, col }, focus: last })
   }
 
+  /**
+   * Файл Excel или CSV — в эту книгу.
+   *
+   * Сервер разбирает файл, а листы в книгу пишет редактор: так перенос
+   * расходится остальным участникам обычной правкой и отменяется Ctrl+Z.
+   */
+  const importFile = async (file: File) => {
+    setImportError('')
+    if (!editable) {
+      setImportError('Загрузить файл может только тот, кто правит таблицу. Переключитесь в «Редактирование».')
+      return
+    }
+    if (!isSheetFile(file)) {
+      setImportError(`«${file.name}» — не таблица. Подойдёт файл Excel (.xlsx, .xls) или .csv.`)
+      return
+    }
+
+    setImporting(true)
+    try {
+      const imported = await api.readSheetFile(source.id, file)
+      const first = importSheets(doc, imported.sheets)
+      if (first < 0) {
+        setImportError('В файле нет листов с данными.')
+        return
+      }
+
+      const count = imported.sheets.reduce((sum, item) => sum + Object.keys(item.cells).length, 0)
+      setActive(first)
+      setSelection(cellAt(0, 0))
+      setArrival(
+        `Загружено из «${file.name}»: `
+        + (imported.sheets.length === 1
+          ? `лист «${imported.sheets[0].name}»`
+          : `листов ${imported.sheets.length}`)
+        + `, заполненных ячеек ${count}`,
+      )
+      window.setTimeout(() => setArrival(''), 8000)
+    } catch (error) {
+      setImportError(error instanceof ApiError ? error.message : 'Не удалось загрузить файл')
+    } finally {
+      setImporting(false)
+      // Тот же файл вторым разом иначе не выберется: значение поля не
+      // меняется, и события не будет.
+      if (filePicker.current) filePicker.current.value = ''
+    }
+  }
+
+  const hasFiles = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
+
   const handleShortcuts = (event: React.KeyboardEvent) => {
     if (!event.ctrlKey && !event.metaKey) return
 
@@ -332,7 +390,59 @@ function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider
   const rect = bounds(selection)
 
   return (
-    <div className="flex h-full min-h-0 flex-col" onKeyDown={handleShortcuts}>
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      onKeyDown={handleShortcuts}
+      onDragEnter={(event) => {
+        if (!hasFiles(event)) return
+        event.preventDefault()
+        setDragging(true)
+      }}
+      onDragOver={(event) => {
+        // Без preventDefault браузер не даст отпустить файл и откроет его сам.
+        if (!hasFiles(event)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(event) => {
+        // dragleave приходит и при переходе на вложенный элемент — гасим
+        // подсветку только когда курсор ушёл с таблицы совсем.
+        const next = event.relatedTarget
+        if (next instanceof Node && event.currentTarget.contains(next)) return
+        setDragging(false)
+      }}
+      onDrop={(event) => {
+        if (!hasFiles(event)) return
+        event.preventDefault()
+        setDragging(false)
+        const file = event.dataTransfer.files[0]
+        if (file) void importFile(file)
+      }}
+    >
+      <input
+        ref={filePicker}
+        type="file"
+        accept={SHEET_FILE_ACCEPT}
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void importFile(file)
+        }}
+      />
+
+      {dragging && (
+        <div
+          aria-hidden="true"
+          className="animate-fade pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-accent bg-surface/90 text-center"
+        >
+          <UploadIcon size={30} />
+          <p className="text-base font-medium text-ink">
+            {editable ? 'Отпустите файл, чтобы загрузить его в таблицу' : 'Таблица открыта только для просмотра'}
+          </p>
+          <p className="text-sm text-ink-muted">Excel (.xlsx, .xls) или .csv</p>
+        </div>
+      )}
+
       <SpreadsheetToolbar
         editable={editable}
         style={focusStyle}
@@ -360,6 +470,7 @@ function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider
           editable && setFrozen(doc, sheet, { rows: frozen(sheet).rows > 0 ? 0 : 1 })
         }
         onCharts={() => setCharting(true)}
+        onImport={() => filePicker.current?.click()}
         onFillArrivals={() => {
           if (!editable) return
           const { filled, reasons } = fillAllArrivals(doc, sheet, legs, lastFilledRow(sheet))
@@ -414,6 +525,26 @@ function Workbook({ mode, provider, user }: Props & { provider: DocumentProvider
           window.setTimeout(() => setArrival(''), 6000)
         }}
       />
+
+      {importing && (
+        <p role="status" className="border-b border-hairline bg-surface-muted px-3 py-1.5 text-xs text-ink-muted">
+          Загрузка файла…
+        </p>
+      )}
+
+      {importError && (
+        <div role="alert" className="flex items-center gap-2 border-b border-hairline bg-red-50 px-3 py-1.5 text-xs text-red-700">
+          <span className="min-w-0 flex-1">{importError}</span>
+          <button
+            type="button"
+            onClick={() => setImportError('')}
+            aria-label="Скрыть сообщение"
+            className="shrink-0 rounded-full p-1 hover:bg-red-100"
+          >
+            <CloseIcon size={14} />
+          </button>
+        </div>
+      )}
 
       {arrival && (
         <p role="status" className="border-b border-hairline bg-surface-muted px-3 py-1.5 text-xs text-ink-muted">

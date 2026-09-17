@@ -6,6 +6,7 @@ import type {
   Document,
   DocumentSummary,
   Folder,
+  ImportedBook,
   Notification,
   Paginated,
   Permission,
@@ -73,6 +74,18 @@ export const api = {
     form.append('file', file)
     if (folderId) form.append('folder_id', folderId)
     return request<Document>('/documents/import/', { method: 'POST', formData: form })
+  },
+  /**
+   * Листы из файла для открытой таблицы. Сервер только разбирает файл —
+   * в книгу листы пишет редактор, иначе запись разошлась бы с CRDT.
+   */
+  readSheetFile: (documentId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<ImportedBook>(`/documents/${documentId}/import/`, {
+      method: 'POST',
+      formData: form,
+    })
   },
   createDocument: (
     body: { title?: string; folder_id?: string; template_id?: string } = {},

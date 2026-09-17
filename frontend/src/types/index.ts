@@ -125,6 +125,17 @@ export type Document = DocumentSummary & {
   stats: DocumentStats
 }
 
+/** Листы, разобранные сервером из файла Excel или CSV. */
+export type ImportedBook = {
+  /** Имя файла без расширения. */
+  name: string
+  kind: 'sheet'
+  sheets: Array<{
+    name: string
+    cells: Record<string, { value: string; display: string }>
+  }>
+}
+
 export type Permission = {
   id: number
   user: User

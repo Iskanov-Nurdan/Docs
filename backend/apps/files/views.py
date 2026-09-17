@@ -81,6 +81,36 @@ class DocumentImportView(APIView):
         )
 
 
+class DocumentSheetImportView(APIView):
+    """Листы из файла — для таблицы, которая уже открыта.
+
+    Сервер только разбирает файл и отдаёт листы, а в книгу их пишет редактор.
+    Состояние книги живёт в CRDT у открытых вкладок: запись в обход него
+    затёрлась бы первым же снимком от любого участника.
+    """
+
+    parser_classes = (MultiPartParser, FormParser)
+    throttle_scope = "export"
+
+    def post(self, request, document_id):
+        document = DocumentRepository().by_id(document_id)
+        if document is None:
+            raise NotFoundError("Документ не найден.")
+        AccessService().require(user=request.user, document=document, minimum=Role.EDITOR)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise BusinessError("Файл не передан.", code="no_file")
+
+        name, content = FileService().read_sheet_file(upload)
+        DocumentService().log(
+            document=document, user=request.user, action=DocumentActivity.Action.IMPORTED,
+            ip=client_ip(request),
+            metadata={"file": upload.name[:255], "sheets": len(content["sheets"])},
+        )
+        return Response({"name": name, **content})
+
+
 class DocumentExportView(APIView):
     """Выгрузка документа. Тяжёлые форматы готовятся в фоне."""
 

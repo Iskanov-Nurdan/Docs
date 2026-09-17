@@ -14,6 +14,7 @@ import {
   RowIcon,
   SearchIcon,
   UndoIcon,
+  UploadIcon,
 } from '@/components/icons'
 import { Select } from '@/components/Select'
 import { STATUS_TONES } from './statuses'
@@ -59,6 +60,8 @@ type Props = {
   onArrived: () => void
   /** Посчитать сроки прибытия по всей таблице. */
   onFillArrivals: () => void
+  /** Выбрать файл Excel или CSV и перенести его листы в книгу. */
+  onImport: () => void
 }
 
 export function SpreadsheetToolbar({
@@ -79,6 +82,7 @@ export function SpreadsheetToolbar({
   onCharts,
   onArrived,
   onFillArrivals,
+  onImport,
 }: Props) {
   const disabled = !editable
 
@@ -284,6 +288,12 @@ export function SpreadsheetToolbar({
         active={headerFrozen}
         disabled={disabled}
         onClick={onToggleFreeze}
+      />
+      <ToolbarButton
+        label={<UploadIcon size={17} />}
+        title="Загрузить из Excel или CSV (можно перетащить файл на таблицу)"
+        disabled={disabled}
+        onClick={onImport}
       />
       <ToolbarButton
         label={<ChartIcon size={17} />}

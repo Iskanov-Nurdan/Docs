@@ -233,33 +233,78 @@ export function seedBook(doc: Y.Doc, content: unknown): boolean {
     for (const item of sheets) {
       const sheet = makeSheet(String(item.name ?? 'Лист1').slice(0, 50))
       target.push([sheet])
-
-      const cells = cellsOf(sheet)
-      for (const [ref, raw] of Object.entries(item.cells ?? {})) {
-        const address = parseRef(ref)
-        // Адрес за пределами листа пропускаем молча только здесь: содержимое
-        // приходит из базы, и падать на одной кривой ячейке шаблона нельзя.
-        if (!address) continue
-        if (address.row >= MAX_ROWS || address.col >= MAX_COLS) continue
-
-        // В базе ячейка — это {value, display}: value введено человеком,
-        // display посчитан. Формулы пересчитает редактор, поэтому берём value.
-        const value =
-          raw && typeof raw === 'object'
-            ? (raw as { value?: unknown }).value
-            : raw
-        if (value === undefined || value === null || value === '') continue
-
-        const mapKey = keyForWrite(doc, sheet, address.row, address.col)
-        if (mapKey === null) continue
-
-        const cell = new Y.Map<unknown>()
-        cell.set(KEYS.raw, String(value))
-        cells.set(mapKey, cell)
-      }
+      fillSheet(doc, sheet, item.cells ?? {})
     }
   })
   return true
+}
+
+/** Сохранённые ячейки {адрес: {value, display}} — в лист. */
+function fillSheet(doc: Y.Doc, sheet: SheetMap, source: Record<string, unknown>): void {
+  const cells = cellsOf(sheet)
+  for (const [ref, raw] of Object.entries(source)) {
+    const address = parseRef(ref)
+    // Адрес за пределами листа пропускаем молча: содержимое приходит из базы
+    // или из файла, и падать на одной кривой ячейке нельзя.
+    if (!address) continue
+    if (address.row >= MAX_ROWS || address.col >= MAX_COLS) continue
+
+    // Ячейка — это {value, display}: value введено человеком, display
+    // посчитан. Формулы пересчитает редактор, поэтому берём value.
+    const value =
+      raw && typeof raw === 'object'
+        ? (raw as { value?: unknown }).value
+        : raw
+    if (value === undefined || value === null || value === '') continue
+
+    const mapKey = keyForWrite(doc, sheet, address.row, address.col)
+    if (mapKey === null) continue
+
+    const cell = new Y.Map<unknown>()
+    cell.set(KEYS.raw, String(value))
+    cells.set(mapKey, cell)
+  }
+}
+
+/**
+ * Листы из файла — в открытую книгу. Возвращает номер первого из них.
+ *
+ * Пустая книга заменяется целиком: пустой «Лист1» рядом с перенесёнными
+ * данными только сбивал бы с толку. В заполненную книгу листы добавляются
+ * рядом — затирать то, что уже набрано (в том числе соседями по документу),
+ * импорт не вправе.
+ */
+export function importSheets(
+  doc: Y.Doc,
+  sheets: Array<{ name: string; cells: Record<string, unknown> }>,
+): number {
+  if (sheets.length === 0) return -1
+  if (isBookEmpty(doc) && seedBook(doc, { kind: 'sheet', sheets })) {
+    ensureBook(doc)
+    return 0
+  }
+
+  const target = book(doc)
+  const first = target.length
+  doc.transact(() => {
+    for (const item of sheets) {
+      const sheet = makeSheet(uniqueSheetName(doc, item.name || 'Лист'))
+      target.push([sheet])
+      fillSheet(doc, sheet, item.cells)
+    }
+  })
+  return first
+}
+
+/** «Рейсы», а если такой лист уже есть — «Рейсы (2)». */
+function uniqueSheetName(doc: Y.Doc, wanted: string): string {
+  const used = new Set(book(doc).toArray().map((sheet) => String(sheet.get('name'))))
+  const base = wanted.trim().slice(0, 44) || 'Лист'
+  if (!used.has(base)) return base
+
+  let number = 2
+  while (used.has(`${base} (${number})`)) number += 1
+  return `${base} (${number})`
 }
 
 export function sheetList(doc: Y.Doc): SheetInfo[] {

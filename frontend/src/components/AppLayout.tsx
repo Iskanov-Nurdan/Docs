@@ -30,6 +30,7 @@ import {
 import { ApiError, api } from '@/api'
 import { useAuth } from '@/store/auth'
 import { useFolders } from '@/store/folders'
+import { SHEET_FILE_ACCEPT } from '@/utils/files'
 
 const SECTIONS = [
   { to: '/documents', label: 'Мои документы', Icon: SheetIcon },
@@ -223,7 +224,7 @@ export function AppLayout({ title, actions, children }: Props) {
           <input
             ref={filePicker}
             type="file"
-            accept=".xlsx,.xlsm,.csv"
+            accept={SHEET_FILE_ACCEPT}
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0]

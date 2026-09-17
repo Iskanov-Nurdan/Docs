@@ -49,37 +49,45 @@ class FileService:
         logger.info("Загружено изображение %s (%s байт)", stored.id, stored.size)
         return stored
 
-    def import_document(self, *, user, upload, folder_id=None, ip: str | None = None):
-        """Создаёт таблицу из присланного файла Excel или CSV.
+    def read_sheet_file(self, upload) -> tuple[str, dict]:
+        """Разбирает файл таблицы: (имя без расширения, книга).
 
-        Формат определяется по расширению, но решает не оно: файл всё равно
-        разбирается, и «таблица.xlsx», внутри которой лежит что угодно другое,
-        не пройдёт дальше разбора.
+        Расширение отсекает заведомо чужие файлы — картинку или документ Word
+        разбирать незачем. Но какой разборщик взять, решает содержимое файла:
+        см. file_to_book.
         """
-        from apps.documents.services import DocumentService
-        from apps.files.importers import ImportError_, csv_to_book, xlsx_to_book
+        from apps.files.importers import SUPPORTED_EXTENSIONS, ImportError_, file_to_book
 
         self._check_size(upload)
 
-        name = (upload.name or "Таблица").rsplit("/", 1)[-1]
+        name = (upload.name or "Таблица").replace("\\", "/").rsplit("/", 1)[-1]
         stem, _, extension = name.rpartition(".")
-        extension = extension.lower()
-
-        if extension not in {"xlsx", "xlsm", "csv"}:
+        if extension.lower() not in SUPPORTED_EXTENSIONS:
             raise BusinessError(
-                "Поддерживаются файлы Excel (.xlsx, .xlsm) и таблицы .csv. "
-                "Старый формат .xls откройте в Excel и сохраните как .xlsx.",
+                "Поддерживаются файлы Excel (.xlsx, .xlsm, .xls) и таблицы .csv.",
                 code="unsupported_type",
             )
 
-        data = upload.read()
         try:
-            if extension == "csv":
-                content = csv_to_book(data, name=stem or "Лист1")
-            else:
-                content = xlsx_to_book(data)
+            content = file_to_book(upload.read(), name=name)
         except ImportError_ as error:
             raise BusinessError(str(error), code="import_failed") from error
+        except Exception:
+            # Разборщики сторонние, и на кривом файле падают как угодно.
+            # Человеку — понятная причина, в журнал — подробности.
+            logger.exception("Не удалось разобрать файл %s", name)
+            raise BusinessError(
+                "Не удалось прочитать файл. Откройте его в Excel и сохраните как .xlsx.",
+                code="import_failed",
+            ) from None
+        return stem or name, content
+
+    def import_document(self, *, user, upload, folder_id=None, ip: str | None = None):
+        """Создаёт таблицу из присланного файла Excel или CSV."""
+        from apps.documents.services import DocumentService
+
+        stem, content = self.read_sheet_file(upload)
+        name = upload.name
 
         document = DocumentService().create(
             user=user,

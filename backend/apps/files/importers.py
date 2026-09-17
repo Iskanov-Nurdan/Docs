@@ -1,8 +1,14 @@
 """Перенос таблицы из файла в книгу.
 
 Обратная сторона converters.py: там книга превращается в файл, здесь файл —
-в книгу. Поддерживаются .xlsx, .xlsm и .csv: именно их присылают, когда
+в книгу. Поддерживаются .xlsx, .xlsm, .xls и .csv: именно их присылают, когда
 таблицу вели в Excel и хотят продолжить здесь.
+
+Формат определяется по содержимому, а не по расширению. «.xls» — это три
+разных формата под одним именем: двоичная книга Excel 97–2003, XML-таблица
+Excel 2003 и обычная HTML-страница с таблицей. Последние два так выгружают
+учётные и отслеживающие системы, и Excel открывает их молча — человек уверен,
+что у него настоящий Excel. Бывает и наоборот: «.xls» переименовали из .xlsx.
 
 Формулы переносятся как есть. Редактор принимает английские имена наравне
 с русскими (SUM, IF, COUNTIF — см. ALIASES в frontend/src/spreadsheet/
@@ -198,6 +204,215 @@ def csv_to_book(data: bytes, *, name: str = "Лист1") -> dict:
     if not cells:
         raise ImportError_("В файле нет данных.")
     return {"kind": "sheet", "sheets": [{"id": "s1", "name": name[:50], "cells": cells}]}
+
+
+# Подписи форматов в первых байтах файла.
+_ZIP = b"PK\x03\x04"
+_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+SUPPORTED_EXTENSIONS = {"xlsx", "xlsm", "xls", "csv"}
+
+
+def file_to_book(data: bytes, *, name: str) -> dict:
+    """Книга из файла любого поддерживаемого вида.
+
+    Расширение нужно только для имени листа у CSV: верить ему в выборе
+    разборщика нельзя (см. начало модуля).
+    """
+    if not data:
+        raise ImportError_("Файл пуст.")
+
+    stem = name.rpartition(".")[0] or name or "Лист1"
+
+    if data.startswith(_ZIP):
+        return xlsx_to_book(data)
+    if data.startswith(_OLE2):
+        return xls_to_book(data)
+
+    head = data[:2048].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if head.startswith(b"<?xml") and b"urn:schemas-microsoft-com:office:spreadsheet" in data[:4096]:
+        return spreadsheetml_to_book(data)
+    if head.startswith(b"<") and (b"<table" in data[:200000].lower() or b"<html" in head):
+        return html_to_book(data, name=stem)
+
+    return csv_to_book(data, name=stem)
+
+
+def xls_to_book(data: bytes) -> dict:
+    """Двоичная книга Excel 97–2003.
+
+    Формул xlrd не отдаёт — только посчитанные значения. Для переноса журнала
+    этого достаточно: числа те же, что человек видел в Excel.
+    """
+    import xlrd
+
+    try:
+        workbook = xlrd.open_workbook(file_contents=data, on_demand=True)
+    except Exception as error:  # noqa: BLE001 — xlrd кидает что угодно
+        logger.warning("Не удалось разобрать книгу .xls: %s", error)
+        raise ImportError_("Файл .xls повреждён или защищён паролем.") from error
+
+    sheets = []
+    try:
+        for index in range(workbook.nsheets):
+            source = workbook.sheet_by_index(index)
+            cells: dict[str, dict] = {}
+            for row in range(min(source.nrows, MAX_ROWS)):
+                for col in range(min(source.ncols, MAX_COLS)):
+                    text = _xls_cell_text(source.cell(row, col), workbook.datemode)
+                    if text:
+                        cells[cell_ref(row, col)] = {"value": text, "display": text}
+            name = source.name[:50] or f"Лист{index + 1}"
+            sheets.append({"id": f"s{index + 1}", "name": name, "cells": cells})
+            workbook.unload_sheet(index)
+    finally:
+        workbook.release_resources()
+
+    return _finish(sheets)
+
+
+def _xls_cell_text(cell, datemode: int) -> str:
+    import xlrd
+
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return ""
+    if cell.ctype == xlrd.XL_CELL_ERROR:
+        return xlrd.error_text_from_code.get(cell.value, "#ОШИБКА")
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return _as_text(bool(cell.value))
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            moment = xlrd.xldate.xldate_as_datetime(cell.value, datemode)
+        except (ValueError, OverflowError):
+            return _as_text(cell.value)
+        # Дробь меньше суток — это время без даты.
+        if cell.value < 1:
+            return _as_text(moment.time())
+        return _as_text(moment)
+    return _as_text(cell.value).strip()
+
+
+def html_to_book(data: bytes, *, name: str = "Лист1") -> dict:
+    """HTML-страница с таблицами: каждая таблица — отдельный лист."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(_decode_html(data), "lxml")
+    tables = [table for table in soup.find_all("table") if not table.find_parent("table")]
+
+    sheets = []
+    for index, table in enumerate(tables):
+        cells: dict[str, dict] = {}
+        # Объединённые по вертикали ячейки занимают место в следующих строках:
+        # без учёта этого данные ниже съехали бы на столбец влево.
+        occupied: set[tuple[int, int]] = set()
+        rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+
+        for row_index, row in enumerate(rows[:MAX_ROWS]):
+            col_index = 0
+            for cell in row.find_all(["td", "th"], recursive=False):
+                while (row_index, col_index) in occupied:
+                    col_index += 1
+                span_cols = _span(cell.get("colspan"))
+                span_rows = _span(cell.get("rowspan"))
+                text = " ".join(cell.get_text(" ", strip=True).split())
+                if text and col_index < MAX_COLS:
+                    cells[cell_ref(row_index, col_index)] = {"value": text, "display": text}
+                for extra_row in range(span_rows):
+                    for extra_col in range(span_cols):
+                        occupied.add((row_index + extra_row, col_index + extra_col))
+                col_index += span_cols
+
+        if cells:
+            sheet_name = name if len(tables) == 1 else f"{name} {index + 1}"
+            sheets.append({"id": f"s{len(sheets) + 1}", "name": sheet_name[:50], "cells": cells})
+
+    if not sheets:
+        raise ImportError_("В файле нет таблицы с данными.")
+    return {"kind": "sheet", "sheets": sheets}
+
+
+def _span(value) -> int:
+    try:
+        return max(1, min(int(value), MAX_COLS))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _decode_html(data: bytes) -> str:
+    """Кодировка берётся из самой страницы: выгрузки из 1С бывают в cp1251."""
+    match = re.search(rb"charset\s*=\s*[\"']?([\w-]+)", data[:4096], re.IGNORECASE)
+    if match:
+        try:
+            return data.decode(match.group(1).decode("ascii"))
+        except (LookupError, UnicodeDecodeError):
+            pass
+    return _decode(data)
+
+
+_SS = "{urn:schemas-microsoft-com:office:spreadsheet}"
+
+
+def spreadsheetml_to_book(data: bytes) -> dict:
+    """XML-таблица Excel 2003 («Таблица XML 2003»)."""
+    from lxml import etree
+
+    try:
+        # resolve_entities=False и no_network — файл пришёл от человека,
+        # внешние сущности в нём не должны ничего подгружать.
+        parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+        root = etree.fromstring(data, parser=parser)
+    except etree.XMLSyntaxError as error:
+        raise ImportError_("Файл повреждён: XML не читается.") from error
+
+    sheets = []
+    for index, worksheet in enumerate(root.iter(f"{_SS}Worksheet")):
+        cells: dict[str, dict] = {}
+        row_index = -1
+        for row in worksheet.iter(f"{_SS}Row"):
+            # ss:Index — номер с единицы; пропущенные пустые строки не пишутся.
+            row_index = _index(row, row_index + 1)
+            if row_index >= MAX_ROWS:
+                break
+            col_index = -1
+            for cell in row.iter(f"{_SS}Cell"):
+                col_index = _index(cell, col_index + 1)
+                data_node = cell.find(f"{_SS}Data")
+                text = "".join(data_node.itertext()).strip() if data_node is not None else ""
+                if text and col_index < MAX_COLS:
+                    if data_node.get(f"{_SS}Type") == "DateTime":
+                        text = _xml_datetime(text)
+                    cells[cell_ref(row_index, col_index)] = {"value": text, "display": text}
+                # Объединённая ячейка занимает и соседние столбцы.
+                merge = cell.get(f"{_SS}MergeAcross") or ""
+                if merge.isdigit():
+                    col_index += int(merge)
+
+        name = (worksheet.get(f"{_SS}Name") or f"Лист{index + 1}")[:50]
+        sheets.append({"id": f"s{index + 1}", "name": name, "cells": cells})
+
+    return _finish(sheets)
+
+
+def _index(node, default: int) -> int:
+    try:
+        return int(node.get(f"{_SS}Index")) - 1
+    except (TypeError, ValueError):
+        return default
+
+
+def _xml_datetime(text: str) -> str:
+    try:
+        return _as_text(datetime.fromisoformat(text))
+    except ValueError:
+        return text
+
+
+def _finish(sheets: list[dict]) -> dict:
+    if not sheets:
+        raise ImportError_("В книге нет ни одного листа.")
+    if not any(sheet["cells"] for sheet in sheets):
+        raise ImportError_("В файле нет данных.")
+    return {"kind": "sheet", "sheets": sheets}
 
 
 def _decode(data: bytes) -> str:
