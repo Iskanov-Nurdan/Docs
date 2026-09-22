@@ -37,6 +37,7 @@ import {
 import { STATUS_TONES, isDeadlineHeader, parseDeadline } from './statuses'
 import { formatMoment, formatVia, routeHours, viaColumn } from './routing'
 import { useRoutes } from '@/store/routes'
+import { isMoneyColumn, writeMoney } from './money'
 
 type FieldKind = 'text' | 'deadline' | 'status' | 'formula' | 'from' | 'to' | 'via' | 'departure'
 
@@ -79,11 +80,13 @@ type Props = {
   /** Меняется на каждую правку книги — повод перечитать шапку. */
   version: number
   cols: number
+  /** Курс доллара: суммы в форме пересчитываются так же, как в ячейке. */
+  rate: number | null
   onAdded: (row: number) => void
   onClose: () => void
 }
 
-export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Props) {
+export function AddRowDialog({ doc, sheet, version, cols, rate, onAdded, onClose }: Props) {
   /**
    * Куда встанет запись и откуда взять формулы.
    *
@@ -231,7 +234,14 @@ export function AddRowDialog({ doc, sheet, version, cols, onAdded, onClose }: Pr
         }
 
         const value = (values[item.col] ?? '').trim()
-        if (value) writeCell(doc, sheet, row, item.col, value)
+        if (!value) continue
+
+        // Сумма в форме — те же сомы, что и в ячейке: пересчитываем.
+        if (isMoneyColumn(sheet, item.col)) {
+          writeMoney(doc, sheet, row, item.col, value, rate)
+          continue
+        }
+        writeCell(doc, sheet, row, item.col, value)
       }
 
       // Точки по пути — отдельной колонкой, одной записью: «Кашгар → Нарын».

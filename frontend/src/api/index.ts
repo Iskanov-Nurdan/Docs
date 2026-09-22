@@ -16,6 +16,7 @@ import type {
   ShareLink,
   Template,
   User,
+  UsdRate,
   Version,
 } from '@/types'
 
@@ -115,6 +116,9 @@ export const api = {
   updateRouteLeg: (id: string, body: Partial<{ hours: number; note: string }>) =>
     request<RouteLeg>(`/route-legs/${id}/`, { method: 'PATCH', body }),
   deleteRouteLeg: (id: string) => request<void>(`/route-legs/${id}/`, { method: 'DELETE' }),
+
+  /** Курс доллара к сому: по нему таблица пересчитывает введённые суммы. */
+  usdRate: () => request<UsdRate>('/rates/usd/'),
 
   // --- Папки ---
   listFolders: () => request<Folder[]>('/folders/'),

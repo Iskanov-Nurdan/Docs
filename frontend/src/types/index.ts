@@ -125,6 +125,19 @@ export type Document = DocumentSummary & {
   stats: DocumentStats
 }
 
+/**
+ * Курс доллара к сому.
+ *
+ * source говорит, откуда он: 'nbkr' — сегодняшний с сайта Нацбанка,
+ * 'cache' — последний удачный, если сайт не ответил, 'unavailable' — курса
+ * нет вовсе, и тогда rate равен null.
+ */
+export type UsdRate = {
+  rate: number | null
+  source: 'nbkr' | 'cache' | 'unavailable'
+  date: string | null
+}
+
 /** Листы, разобранные сервером из файла Excel или CSV. */
 export type ImportedBook = {
   /** Имя файла без расширения. */

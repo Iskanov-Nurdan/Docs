@@ -57,8 +57,16 @@
 : `notifications/?unread=true` (в ответе есть `unread_count`),
   `notifications/{id}/read/`, `notifications/read-all/`.
 
+Справочники
+: `places/`, `route-legs/` (правит администратор), `rates/usd/` — курс доллара
+  к сому: `{rate, source, date}`, где `source` — `nbkr`, `cache` (последний
+  удачный) или `unavailable` (тогда `rate` равен `null`).
+
 Файлы
-: `files/images/` (multipart `file`, `document_id`), `documents/{id}/export/?format=`
+: `files/images/` (multipart `file`, `document_id`), `documents/{id}/import/`
+  (multipart `file` — разбирает Excel или CSV для открытой таблицы и отдаёт
+  листы, в книгу их пишет редактор), `documents/import/` (тот же файл, но
+  новым документом), `documents/{id}/export/?format=`
   (возвращает `task_id`), `exports/{taskId}/` (`status`, `file.url`).
   Форматы: `xlsx`, `csv`, `pdf`, `docx`, `txt`, `html`.
   Выгрузку выполняет Celery — опрашивать статус с интервалом ~1 с.

@@ -59,6 +59,12 @@ import {
 } from './model'
 import { bounds, cellAt, cells as cellsOfSelection, label, type Cell, type Selection } from './selection'
 import { useRoutes } from '@/store/routes'
+import { useRates } from '@/store/rates'
+import { isMoneyColumn, writeMoney } from './money'
+
+/** Число в сообщении: «128 400», «87,45». */
+const money = (value: number) =>
+  new Intl.NumberFormat('ru', { maximumFractionDigits: 2 }).format(value)
 
 type Props = {
   document: Document
@@ -198,6 +204,11 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
   useEffect(() => {
     loadRoutes()
   }, [loadRoutes])
+  // Курс нужен, как только в колонку суммы впишут число: спрашиваем заранее.
+  const { usd, load: loadRate } = useRates()
+  useEffect(() => {
+    loadRate()
+  }, [loadRate])
   const [matches, setMatches] = useState<CellHit[]>([])
 
   useEffect(() => {
@@ -206,10 +217,21 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
     return () => doc.off('update', bump)
   }, [doc])
 
-  // Отменяются только свои правки: чужие приходят с пометкой 'remote',
-  // а UndoManager по умолчанию следит лишь за местными изменениями.
-  const undoManager = useMemo(() => new Y.UndoManager(book(doc)), [doc])
-  useEffect(() => () => undoManager.destroy(), [undoManager])
+  /**
+   * Отменяются только свои правки: чужие приходят с пометкой 'remote',
+   * а UndoManager по умолчанию следит лишь за местными изменениями.
+   *
+   * Менеджер заводится в эффекте, а не в useMemo. React в разработке монтирует
+   * дерево дважды, и уборка первого монтирования уничтожала объект, который
+   * useMemo отдавал дальше: отмена молча переставала работать, хотя кнопка
+   * нажималась. Здесь на каждое монтирование создаётся свой менеджер.
+   */
+  const [undoManager, setUndoManager] = useState<Y.UndoManager | null>(null)
+  useEffect(() => {
+    const manager = new Y.UndoManager(book(doc))
+    setUndoManager(manager)
+    return () => manager.destroy()
+  }, [doc])
 
   const sheets = sheetList(doc)
   const index = Math.min(active, Math.max(sheets.length - 1, 0))
@@ -354,11 +376,11 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
       styleSelection({ underline: focusStyle.underline ? undefined : true })
     } else if (key === 'z') {
       event.preventDefault()
-      if (event.shiftKey) undoManager.redo()
-      else undoManager.undo()
+      if (event.shiftKey) undoManager?.redo()
+      else undoManager?.undo()
     } else if (key === 'y') {
       event.preventDefault()
-      undoManager.redo()
+      undoManager?.redo()
     } else if (key === 'f') {
       // Ctrl+F — поиск по листу, а не по странице: в таблице на пять тысяч
       // строк браузер ищет только по отрисованным ячейкам, то есть по экрану.
@@ -447,8 +469,8 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
         editable={editable}
         style={focusStyle}
         onStyle={styleSelection}
-        onUndo={() => undoManager.undo()}
-        onRedo={() => undoManager.redo()}
+        onUndo={() => undoManager?.undo()}
+        onRedo={() => undoManager?.redo()}
         onInsertRow={() => editable && insertRow(doc, sheet, rect.top)}
         onDeleteRow={() => editable && deleteRow(doc, sheet, rect.top)}
         onInsertCol={() => editable && insertCol(doc, sheet, rect.left)}
@@ -599,6 +621,7 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
           doc={doc}
           sheet={sheet}
           version={version}
+          rate={usd?.rate ?? null}
           cols={colCount(sheet)}
           // Выделение переходит на новую запись: видно, что она добавилась,
           // и сетка сама прокручивается к ней.
@@ -636,6 +659,25 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
         onSelectionChange={changeSelection}
         onCommit={(row, col, raw) => {
           if (!editable) return
+
+          // Сумму пишут в сомах, а таблица ведётся в долларах: в денежной
+          // колонке число пересчитывается сразу, вместе со значком валюты.
+          if (isMoneyColumn(sheet, col)) {
+            const written = writeMoney(doc, sheet, row, col, raw, usd?.rate ?? null)
+            if (written.kind === 'converted') {
+              setArrival(
+                `${money(written.som)} сом по курсу ${money(written.rate)}`
+                + ` — это ${money(written.usd)} $`
+                + (usd?.source === 'cache' ? ' (курс последний известный)' : ''),
+              )
+              window.setTimeout(() => setArrival(''), 6000)
+            } else if (written.kind === 'no-rate') {
+              setArrival('Курс доллара не получен — сумма осталась в сомах. Пересчитается, когда курс появится.')
+              window.setTimeout(() => setArrival(''), 8000)
+            }
+            return
+          }
+
           writeCell(doc, sheet, row, col, raw)
 
           // Заполнили «Куда» или время выезда — срок прибытия таблица

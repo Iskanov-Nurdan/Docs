@@ -31,6 +31,7 @@ import {
   rowCount,
   setColWidth,
 } from './model'
+import { TRANSIT_AMOUNTS, isTransitColumn } from './money'
 import { bounds, cellAt, contains, type Cell, type Selection } from './selection'
 import { formatVia, isRoutePointColumn, parseVia, viaColumn } from './routing'
 import { deadlineTone, isDeadlineHeader, isSettled, parseDeadline, statusTone } from './statuses'
@@ -261,6 +262,12 @@ export function Grid({
 
     if (places.length > 0 && isRoutePointColumn(sheet, editing.col)) {
       return places.map((place) => place.name)
+    }
+
+    // «Транзит» — это сумма из нескольких обычных: набирать её руками каждый
+    // раз незачем. Свой список столбца, если он задан, важнее этого.
+    if (isTransitColumn(sheet, editing.col)) {
+      return TRANSIT_AMOUNTS.map((amount) => `${amount} $`)
     }
     return null
     // eslint-disable-next-line react-hooks/exhaustive-deps

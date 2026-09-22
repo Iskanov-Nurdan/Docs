@@ -5,6 +5,8 @@
 изменённую ячейку.
 """
 from rest_framework import serializers, viewsets
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.core.exceptions import BusinessError
 from apps.core.permissions import IsAdmin
@@ -108,3 +110,17 @@ class RouteLegViewSet(viewsets.ModelViewSet):
         from rest_framework.response import Response
 
         return Response(self.get_serializer(self.get_queryset(), many=True).data)
+
+
+class UsdRateView(APIView):
+    """Текущий курс доллара к сому — по нему таблица пересчитывает суммы.
+
+    Читают все: сумму вводит любой, кто ведёт журнал. Менять курс руками
+    нельзя намеренно — он официальный, и «свой» курс у каждого превратил бы
+    суммы в несравнимые.
+    """
+
+    def get(self, request):
+        from apps.routes.rates import usd_rate
+
+        return Response(usd_rate())
