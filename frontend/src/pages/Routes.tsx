@@ -13,7 +13,7 @@ import { PlusIcon, TrashIcon } from '@/components/icons'
 import { ApiError, api } from '@/api'
 import { useAuth } from '@/store/auth'
 import { useRoutes } from '@/store/routes'
-import type { Place, RouteLeg } from '@/types'
+import type { Place, RouteLeg, TransitAmount } from '@/types'
 
 /**
  * Отказ сервера человеческим языком.
@@ -36,7 +36,7 @@ const FIELD =
 
 export function RoutesPage() {
   const { user } = useAuth()
-  const { places, legs, loading, error, load } = useRoutes()
+  const { places, legs, transitAmounts, loading, error, load } = useRoutes()
   const canEdit = Boolean(user?.is_staff)
 
   const [placeName, setPlaceName] = useState('')
@@ -45,7 +45,10 @@ export function RoutesPage() {
   const [hours, setHours] = useState('')
   const [both, setBoth] = useState(true)
   const [message, setMessage] = useState('')
-  const [removing, setRemoving] = useState<{ kind: 'place' | 'leg'; item: Place | RouteLeg } | null>(null)
+  const [transit, setTransit] = useState('')
+  const [removing, setRemoving] = useState<
+    { kind: 'place' | 'leg' | 'transit'; item: Place | RouteLeg | TransitAmount } | null
+  >(null)
 
   useEffect(() => {
     load(true)
@@ -128,10 +131,30 @@ export function RoutesPage() {
     }
   }
 
+  const addTransit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    // Из «250 $» и «1 200» получаем число: значок и разделители разрядов
+    // человек пишет по привычке. \s в JS покрывает и неразрывный пробел.
+    const value = Number(transit.replace(',', '.').replace(/[\s$]/g, ''))
+    if (!Number.isFinite(value) || value <= 0) {
+      say('Укажите сумму транзита в долларах')
+      return
+    }
+    try {
+      await api.createTransitAmount({ amount: value })
+      setTransit('')
+      await load(true)
+      say(`Сумма ${value} $ добавлена`)
+    } catch (err) {
+      say(explain(err, 'Не удалось добавить сумму'))
+    }
+  }
+
   const remove = async () => {
     if (!removing) return
     try {
       if (removing.kind === 'place') await api.deletePlace(removing.item.id)
+      else if (removing.kind === 'transit') await api.deleteTransitAmount(removing.item.id)
       else await api.deleteRouteLeg(removing.item.id)
       await load(true)
       say('Удалено')
@@ -202,6 +225,58 @@ export function RoutesPage() {
             ))}
             {!loading && places.length === 0 && (
               <li className="px-3 py-6 text-center text-sm text-ink-muted">Точек пока нет</li>
+            )}
+          </ul>
+
+          {/* Суммы транзита стоят рядом с точками: и то и другое — заранее
+              оговорённые значения, которые таблица предлагает на выбор. */}
+          <h2 className="mb-2 mt-6 text-sm font-semibold text-ink">
+            Суммы транзита ({transitAmounts.length})
+          </h2>
+          <p className="mb-2 text-xs text-ink-muted">
+            Предлагаются на выбор в колонке «Транзит». Суммы в долларах.
+          </p>
+
+          {canEdit && (
+            <form onSubmit={addTransit} className="mb-3 flex gap-2">
+              <input
+                value={transit}
+                onChange={(event) => setTransit(event.target.value)}
+                placeholder="Например, 250"
+                inputMode="decimal"
+                aria-label="Сумма транзита в долларах"
+                className={FIELD}
+              />
+              <button
+                type="submit"
+                aria-label="Добавить сумму транзита"
+                className="flex shrink-0 items-center gap-1 rounded-full bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+              >
+                <PlusIcon size={16} />
+              </button>
+            </form>
+          )}
+
+          <ul className="divide-y divide-hairline rounded-xl border border-hairline bg-surface">
+            {transitAmounts.map((item) => (
+              <li key={item.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="flex-1 tabular-nums text-ink">{Number(item.amount)} $</span>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setRemoving({ kind: 'transit', item })}
+                    aria-label={`Удалить сумму ${Number(item.amount)} $`}
+                    className="rounded-full p-1 text-ink-muted hover:bg-surface-muted hover:text-red-600"
+                  >
+                    <TrashIcon size={15} />
+                  </button>
+                )}
+              </li>
+            ))}
+            {!loading && transitAmounts.length === 0 && (
+              <li className="px-3 py-6 text-center text-sm text-ink-muted">
+                Сумм пока нет — в таблице предложатся 200, 300 и 500 $
+              </li>
             )}
           </ul>
         </section>
@@ -310,7 +385,9 @@ export function RoutesPage() {
           message={
             removing.kind === 'place'
               ? `Точка «${(removing.item as Place).name}» исчезнет из списков, вместе с ней — маршруты через неё. Таблицы, где она уже написана, не изменятся.`
-              : 'Маршрут удалится, и срок по нему подставляться перестанет.'
+              : removing.kind === 'transit'
+                ? `Сумма ${Number((removing.item as TransitAmount).amount)} $ перестанет предлагаться в колонке «Транзит». Уже проставленные суммы останутся.`
+                : 'Маршрут удалится, и срок по нему подставляться перестанет.'
           }
           confirmLabel="Удалить"
           danger

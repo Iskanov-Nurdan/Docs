@@ -20,8 +20,23 @@ const COLUMNS = {
   transit: ['транзит', 'transit'],
 }
 
-/** Что предлагается в колонке «Транзит», пока свой список не задан. */
-export const TRANSIT_AMOUNTS = [200, 300, 500]
+/**
+ * Запасные суммы транзита — на случай пустого справочника.
+ *
+ * Пустой список в ячейке выглядел бы поломкой, поэтому что-то предложить
+ * нужно всегда. Как только администратор заведёт свои суммы, берутся они.
+ */
+const FALLBACK_TRANSIT = [200, 300, 500]
+
+/** Суммы транзита для выбора в ячейке: «200 $», «300 $». */
+export function transitChoices(amounts: Array<{ amount: string }>): string[] {
+  const values = amounts
+    .map((item) => Number(item.amount))
+    .filter((value) => Number.isFinite(value) && value > 0)
+  const list = values.length > 0 ? values : FALLBACK_TRANSIT
+  // Дробные суммы показываем с копейками, круглые — без: «200 $», «12,50 $».
+  return list.map((value) => `${new Intl.NumberFormat('ru').format(value)} $`)
+}
 
 export const isAmountColumn = (sheet: SheetMap, col: number) =>
   findColumn(sheet, COLUMNS.amount) === col

@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 
 from apps.core.exceptions import BusinessError
 from apps.core.permissions import IsAdmin
-from apps.routes.models import Place, RouteLeg
+from apps.routes.models import Place, RouteLeg, TransitAmount
 
 
 class PlaceSerializer(serializers.ModelSerializer):
@@ -44,6 +44,36 @@ class RouteLegSerializer(serializers.ModelSerializer):
         if origin and destination and origin == destination:
             raise BusinessError("Точка отправления и прибытия совпадают.", code="same_place")
         return attrs
+
+
+class TransitAmountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TransitAmount
+        fields = ("id", "amount", "note", "is_active", "order")
+        read_only_fields = ("id",)
+
+
+class TransitAmountViewSet(viewsets.ModelViewSet):
+    """Суммы транзита: предлагаются в таблице на выбор."""
+
+    serializer_class = TransitAmountSerializer
+
+    def get_queryset(self):
+        queryset = TransitAmount.objects.all()
+        # Скрытую сумму видит только тот, кто правит список.
+        if not (self.request.user.is_authenticated and self.request.user.is_staff):
+            queryset = queryset.filter(is_active=True)
+        return queryset
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAdmin()]
+        return super().get_permissions()
+
+    def list(self, request, *args, **kwargs):
+        from rest_framework.response import Response
+
+        return Response(self.get_serializer(self.get_queryset(), many=True).data)
 
 
 class PlaceViewSet(viewsets.ModelViewSet):

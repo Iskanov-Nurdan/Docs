@@ -236,6 +236,16 @@ export type Place = {
   order: number
 }
 
+/** Сумма транзита из общего справочника. Всегда в долларах. */
+export type TransitAmount = {
+  id: string
+  /** Приходит строкой: сервер отдаёт десятичное число как «200.00». */
+  amount: string
+  note: string
+  is_active: boolean
+  order: number
+}
+
 /** Плечо маршрута: сколько часов от точки до точки. */
 export type RouteLeg = {
   id: string

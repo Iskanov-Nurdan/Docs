@@ -31,7 +31,7 @@ import {
   rowCount,
   setColWidth,
 } from './model'
-import { TRANSIT_AMOUNTS, isTransitColumn } from './money'
+import { isTransitColumn, transitChoices } from './money'
 import { bounds, cellAt, contains, type Cell, type Selection } from './selection'
 import { formatVia, isRoutePointColumn, parseVia, viaColumn } from './routing'
 import { deadlineTone, isDeadlineHeader, isSettled, parseDeadline, statusTone } from './statuses'
@@ -246,6 +246,7 @@ export function Grid({
   const freeze = useMemo(() => frozen(sheet), [sheet, version])
 
   const places = useRoutes((state) => state.places)
+  const transitAmounts = useRoutes((state) => state.transitAmounts)
 
   /**
    * Что предложить на выбор в ячейке, которую сейчас правят.
@@ -264,14 +265,14 @@ export function Grid({
       return places.map((place) => place.name)
     }
 
-    // «Транзит» — это сумма из нескольких обычных: набирать её руками каждый
-    // раз незачем. Свой список столбца, если он задан, важнее этого.
+    // «Транзит» берут не любой: суммы оговорены заранее и лежат в общем
+    // справочнике. Свой список столбца, если он задан, важнее этого.
     if (isTransitColumn(sheet, editing.col)) {
-      return TRANSIT_AMOUNTS.map((amount) => `${amount} $`)
+      return transitChoices(transitAmounts)
     }
     return null
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, sheet, version, places])
+  }, [editing, sheet, version, places, transitAmounts])
 
   /**
    * Точки по пути: выбор сразу нескольких.

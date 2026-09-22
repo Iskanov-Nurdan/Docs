@@ -58,7 +58,7 @@
   `notifications/{id}/read/`, `notifications/read-all/`.
 
 Справочники
-: `places/`, `route-legs/` (правит администратор), `rates/usd/` — курс доллара
+: `places/`, `route-legs/`, `transit-amounts/` (правит администратор), `rates/usd/` — курс доллара
   к сому: `{rate, source, date}`, где `source` — `nbkr`, `cache` (последний
   удачный) или `unavailable` (тогда `rate` равен `null`).
 

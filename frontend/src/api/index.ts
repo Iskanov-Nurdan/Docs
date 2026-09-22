@@ -15,6 +15,7 @@ import type {
   RouteLeg,
   ShareLink,
   Template,
+  TransitAmount,
   User,
   UsdRate,
   Version,
@@ -116,6 +117,12 @@ export const api = {
   updateRouteLeg: (id: string, body: Partial<{ hours: number; note: string }>) =>
     request<RouteLeg>(`/route-legs/${id}/`, { method: 'PATCH', body }),
   deleteRouteLeg: (id: string) => request<void>(`/route-legs/${id}/`, { method: 'DELETE' }),
+
+  listTransitAmounts: () => request<TransitAmount[]>('/transit-amounts/'),
+  createTransitAmount: (body: { amount: number; note?: string; order?: number }) =>
+    request<TransitAmount>('/transit-amounts/', { method: 'POST', body }),
+  deleteTransitAmount: (id: string) =>
+    request<void>(`/transit-amounts/${id}/`, { method: 'DELETE' }),
 
   /** Курс доллара к сому: по нему таблица пересчитывает введённые суммы. */
   usdRate: () => request<UsdRate>('/rates/usd/'),

@@ -7,11 +7,13 @@
  */
 import { create } from 'zustand'
 import { api } from '@/api'
-import type { Place, RouteLeg } from '@/types'
+import type { Place, RouteLeg, TransitAmount } from '@/types'
 
 type RoutesState = {
   places: Place[]
   legs: RouteLeg[]
+  /** Суммы транзита: их предлагает на выбор одноимённая колонка. */
+  transitAmounts: TransitAmount[]
   loaded: boolean
   loading: boolean
   error: string
@@ -31,6 +33,7 @@ export function placeKey(name: string): string {
 export const useRoutes = create<RoutesState>((set, get) => ({
   places: [],
   legs: [],
+  transitAmounts: [],
   loaded: false,
   loading: false,
   error: '',
@@ -39,10 +42,13 @@ export const useRoutes = create<RoutesState>((set, get) => ({
     if (get().loading || (get().loaded && !force)) return
     set({ loading: true, error: '' })
     try {
-      const [places, legs] = await Promise.all([api.listPlaces(), api.listRouteLegs()])
+      const [places, legs, transitAmounts] = await Promise.all([
+        api.listPlaces(), api.listRouteLegs(), api.listTransitAmounts(),
+      ])
       set({
         places: Array.isArray(places) ? places : [],
         legs: Array.isArray(legs) ? legs : [],
+        transitAmounts: Array.isArray(transitAmounts) ? transitAmounts : [],
         loaded: true,
       })
     } catch {

@@ -67,3 +67,29 @@ class RouteLeg(UUIDModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.origin} → {self.destination}: {self.hours} ч"
+
+
+class TransitAmount(UUIDModel, TimeStampedModel):
+    """Сумма транзита, которую предлагают в таблице на выбор.
+
+    Транзит берут не любой: это несколько заранее оговорённых сумм, одних
+    и тех же для всей конторы. Список общий и правит его администратор —
+    иначе в каждой таблице завелись бы свои числа, и сверить их было бы нельзя.
+
+    Суммы в долларах: в них ведётся колонка транзита, как и колонка суммы.
+    """
+
+    amount = models.DecimalField("Сумма, $", max_digits=12, decimal_places=2,
+                                 unique=True, validators=[MinValueValidator(0.01)])
+    note = models.CharField("Пояснение", max_length=120, blank=True)
+    is_active = models.BooleanField("Показывать", default=True, db_index=True)
+    order = models.PositiveIntegerField("Порядок", default=100)
+
+    class Meta:
+        db_table = "route_transit_amounts"
+        verbose_name = "Сумма транзита"
+        verbose_name_plural = "Суммы транзита"
+        ordering = ("order", "amount")
+
+    def __str__(self):
+        return f"{self.amount} $"
