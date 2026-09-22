@@ -521,6 +521,8 @@ export type CellHit = {
 export type FindOptions = {
   matchCase?: boolean
   wholeCell?: boolean
+  /** Искать только в этом столбце. null или undefined — по всему листу. */
+  col?: number | null
 }
 
 function textMatches(text: string, needle: string, options: FindOptions): boolean {
@@ -555,6 +557,9 @@ export function findCells(
     const at = parseKey(mapKey, order)
     if (!at) return
     const { row, col } = at
+    if (typeof options.col === 'number' && col !== options.col) return
+    // Заголовок — не данные: искать машину в слове «Машина» незачем.
+    if (typeof options.col === 'number' && row === 0) return
 
     const raw = cell.get(KEYS.raw)
     const text = raw === undefined || raw === null ? '' : String(raw)
@@ -1040,6 +1045,13 @@ export function findColumn(sheet: SheetMap, prefixes: string[]): number | null {
   }
   return null
 }
+
+/**
+ * Заголовки колонки с номером машины.
+ *
+ * По ней идёт поиск: рейс ищут именно по номеру, а не по грузу или водителю.
+ */
+export const VEHICLE_COLUMNS = ['машина', 'номер маш', 'авто', 'гос', 'транспорт', 'тягач', 'фура']
 
 /** Заголовки колонок, которые заполняет отметка о приёмке. */
 export const ARRIVAL_COLUMNS = {

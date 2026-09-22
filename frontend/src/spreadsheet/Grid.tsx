@@ -440,6 +440,16 @@ export function Grid({
     [matches],
   )
 
+  /**
+   * Строки с найденным. Подсвечивается вся строка, а не одна ячейка: ищут
+   * рейс, а не клетку, и видеть нужно его целиком — куда идёт, когда вышел,
+   * что с ним. Одна жёлтая клетка среди двадцати этого не показывает.
+   */
+  const matchRows = useMemo(
+    () => new Set((matches ?? []).map((cell) => cell.row)),
+    [matches],
+  )
+
   // --------------------------- Перемещение курсора ---------------------------
 
   const revealCell = (row: number, col: number) => {
@@ -816,6 +826,7 @@ export function Grid({
                 const selected = contains(selection, row, col)
                 const isFocus = selection.focus.row === row && selection.focus.col === col
                 const found = matchKeys.has(`${row}:${col}`)
+                const inFoundRow = matchRows.has(row)
                 const numeric = typeof value === 'number'
                 // Цвет по смыслу: сначала слово, потом срок. Ручная заливка
                 // сильнее обоих — её выбрал человек.
@@ -840,7 +851,10 @@ export function Grid({
                       'absolute overflow-hidden whitespace-nowrap border-b border-r',
                       'border-hairline px-1.5 text-sm leading-6 transition-colors',
                       found ? 'bg-amber-200/70 dark:bg-amber-500/30' : '',
-                      selected && !isFocus && !found ? 'bg-accent/10' : '',
+                      // Вся строка найденного — светлее самой ячейки: видно
+                      // и строку целиком, и место, где совпало.
+                      inFoundRow && !found ? 'bg-amber-100/80 dark:bg-amber-500/15' : '',
+                      selected && !isFocus && !found && !inFoundRow ? 'bg-accent/10' : '',
                       isError(value) ? 'text-rose-600 dark:text-rose-400' : '',
                       style.bold ? 'font-semibold' : '',
                       style.italic ? 'italic' : '',
@@ -858,8 +872,13 @@ export function Grid({
                       color: style.color
                         ?? rule?.color
                         ?? (tone ? (isDark ? tone.darkColor : tone.color) : undefined),
-                      background: rule?.background
-                        ?? (tone ? (isDark ? tone.darkBackground : tone.background) : style.background),
+                      // В найденной строке своя заливка уступает подсветке:
+                      // иначе покрашенные ячейки остались бы неотличимыми,
+                      // и строка не читалась бы как найденная.
+                      background: inFoundRow
+                        ? undefined
+                        : rule?.background
+                          ?? (tone ? (isDark ? tone.darkBackground : tone.background) : style.background),
                     }}
                   >
                     {text}

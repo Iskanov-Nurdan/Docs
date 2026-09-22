@@ -1,9 +1,13 @@
 /**
  * Поиск и замена по книге: Ctrl+F.
  *
- * Ищет по мере ввода — по номеру счёта, артикулу, части названия. Найденные
- * ячейки подсвечиваются все сразу, а Enter и стрелки ведут по ним по очереди:
- * в накладной на триста строк один номер встречается несколько раз, и нужно
+ * В журнале рейсов ищут одно — машину, поэтому поиск сразу настроен на колонку
+ * с её номером: строка с нужной машиной подсвечивается целиком, от даты до
+ * отметки о приёмке. Это и нужно увидеть — весь рейс, а не одну ячейку.
+ *
+ * Галочку можно снять и искать по всему листу — по номеру счёта, грузу,
+ * фамилии. Найденные ячейки подсвечиваются все сразу, а Enter и стрелки ведут
+ * по ним по очереди: один номер встречается в таблице несколько раз, и нужно
  * увидеть каждое место, а не только первое.
  *
  * Заменяется введённый текст, а не показанный. Совпадение в результате
@@ -16,6 +20,8 @@ import type * as Y from 'yjs'
 import { ChevronDownIcon, ChevronUpIcon, CloseIcon, SearchIcon } from '@/components/icons'
 import { cellRef } from './formula'
 import {
+  VEHICLE_COLUMNS,
+  findColumn,
   type CellHit,
   type FindOptions,
   type SheetInfo,
@@ -59,6 +65,15 @@ export function SheetFind({
   const [matchCase, setMatchCase] = useState(false)
   const [wholeCell, setWholeCell] = useState(false)
   const [allSheets, setAllSheets] = useState(false)
+
+  // Колонка с номером машины на этом листе. Нет такой — искать будем везде.
+  const vehicleCol = useMemo(
+    () => findColumn(sheet, VEHICLE_COLUMNS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sheet, version],
+  )
+  const [byVehicle, setByVehicle] = useState(true)
+  const onlyVehicle = byVehicle && vehicleCol !== null
   const [current, setCurrent] = useState(0)
   const [note, setNote] = useState('')
 
@@ -69,11 +84,15 @@ export function SheetFind({
     input.current?.select()
   }, [])
 
-  const options: FindOptions = { matchCase, wholeCell }
+  const options: FindOptions = { matchCase, wholeCell, col: onlyVehicle ? vehicleCol : null }
+
+  // По всем листам ищем только без привязки к колонке: её номер на соседнем
+  // листе другой, и поиск ушёл бы не в тот столбец.
+  const searchAllSheets = allSheets && !onlyVehicle
 
   const hits = useMemo(
     () =>
-      allSheets
+      searchAllSheets
         ? findInBook(doc, query, displayFor, options)
         : findCells(sheet, query, displayFor(sheetIndex), options).map((hit) => ({
             ...hit,
@@ -82,7 +101,7 @@ export function SheetFind({
     // displayFor пересоздаётся вместе с пересчётом значений, поэтому в
     // зависимостях достаточно версии книги.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc, sheet, sheetIndex, query, version, matchCase, wholeCell, allSheets],
+    [doc, sheet, sheetIndex, query, version, matchCase, wholeCell, searchAllSheets, onlyVehicle, vehicleCol],
   )
 
   // Подсвечивать можно только то, что на экране, — совпадения с других листов
@@ -101,7 +120,7 @@ export function SheetFind({
   useEffect(() => {
     setCurrent(0)
     setNote('')
-  }, [query, matchCase, wholeCell, allSheets])
+  }, [query, matchCase, wholeCell, allSheets, onlyVehicle])
 
   const activeHit = hits.length ? hits[Math.min(current, hits.length - 1)] : null
 
@@ -181,7 +200,7 @@ export function SheetFind({
 
   const position = activeHit
     ? `${Math.min(current + 1, hits.length)} из ${hits.length} · ${
-        allSheets && sheets[activeHit.sheet ?? 0]
+        searchAllSheets && sheets[activeHit.sheet ?? 0]
           ? `${sheets[activeHit.sheet ?? 0].name}!`
           : ''
       }${cellRef(activeHit.row, activeHit.col)}`
@@ -209,7 +228,7 @@ export function SheetFind({
                 close()
               }
             }}
-            placeholder="Номер, артикул или часть текста"
+            placeholder={onlyVehicle ? 'Номер машины' : 'Номер, артикул или часть текста'}
             className="min-w-0 flex-1 rounded-full border border-hairline bg-surface px-3.5 py-1 text-sm text-ink outline-none transition-colors focus:border-accent"
           />
         </label>
@@ -268,9 +287,11 @@ export function SheetFind({
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        {vehicleCol !== null
+          && checkbox('find-vehicle', 'Только по номеру машины', byVehicle, setByVehicle)}
         {checkbox('find-case', 'Учитывать регистр', matchCase, setMatchCase)}
         {checkbox('find-whole', 'Ячейка целиком', wholeCell, setWholeCell)}
-        {sheets.length > 1 && checkbox('find-all', 'Все листы', allSheets, setAllSheets)}
+        {sheets.length > 1 && !onlyVehicle && checkbox('find-all', 'Все листы', allSheets, setAllSheets)}
 
         {note && (
           <span className="text-xs text-ink-muted" role="status" aria-live="polite">
