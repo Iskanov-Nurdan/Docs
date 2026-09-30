@@ -21,7 +21,7 @@ export const ROW_HEIGHT = 24
 export const DEFAULT_COL_WIDTH = 100
 export const MIN_COL_WIDTH = 40
 export const HEADER_WIDTH = 46
-export const DEFAULT_ROWS = 200
+export const DEFAULT_ROWS = 10_000
 export const DEFAULT_COLS = 26
 
 // Границы листа объявлены рядом с разбором адресов: проверять «A100000000»
@@ -165,7 +165,18 @@ function parseKey(mapKey: string, order: Map<string, number> | null):
  * перенос — это создание списка «0, 1, 2, …», а не перекладывание данных.
  */
 function ensureRows(doc: Y.Doc, sheet: SheetMap): void {
-  if (rowsArray(sheet)) return
+  const existingRows = rowsArray(sheet)
+  if (existingRows) {
+    // Старые книги начинают с двухсот строк. Доращиваем их при открытии,
+    // сохраняя идентификаторы и содержимое имеющихся строк.
+    if (existingRows.length < DEFAULT_ROWS) {
+      doc.transact(() => {
+        const missing = DEFAULT_ROWS - existingRows.length
+        if (missing > 0) existingRows.push(Array.from({ length: missing }, newRowId))
+      })
+    }
+    return
+  }
 
   // Ячейки могли уехать за объявленное число строк — вставка из буфера
   // раньше писала мимо него. Такие строки тоже должны попасть в список,
@@ -1293,7 +1304,7 @@ export function rowHasFormula(sheet: SheetMap, row: number): boolean {
 }
 
 /** Название листа, куда уезжают прибывшие рейсы. */
-export const DELIVERED_SHEET = 'Груз прибыл'
+export const DELIVERED_SHEET = 'Груз доставлен'
 
 /**
  * Переносит строку на другой лист книги.

@@ -83,6 +83,22 @@ export type AdminSummary = {
   trashed: number
 }
 
+export type AccountantRow = {
+  document_id: string
+  document_title: string
+  sheet: string
+  status: 'delivered' | 'in_transit'
+  cargo: string
+  route: string
+  tax: string
+  transit: string
+}
+
+export type AccountantDashboard = {
+  rows: AccountantRow[]
+  totals: Record<'delivered' | 'in_transit', { count: number; tax: string; transit: string }>
+}
+
 export type Folder = {
   id: string
   name: string

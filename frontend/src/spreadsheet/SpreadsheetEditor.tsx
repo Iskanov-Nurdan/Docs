@@ -131,6 +131,10 @@ export function SpreadsheetEditor(props: Props) {
         // с пришедшим, и в книге оказалось бы два «Лист1».
         const shown = () => {
           if (book(target).length === 0) return false
+          // Старые книги уже имеют листы Yjs, поэтому ensureBook нельзя
+          // вызывать только при первом открытии. Здесь доводим их строки
+          // до текущего минимума, не меняя идентификаторы заполненных строк.
+          ensureBook(target)
           setReady(true)
           return true
         }

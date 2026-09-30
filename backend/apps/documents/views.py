@@ -1,5 +1,7 @@
 """HTTP-слой документов: разбор запроса, проверка прав, вызов сервиса."""
 import logging
+import re
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
@@ -9,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.exceptions import BusinessError, NotFoundError
+from apps.core.permissions import IsAccountantOrAdmin
 from apps.core.services import client_ip
 from apps.documents.models import Document, DocumentActivity, Folder
 from apps.documents.repositories import DocumentRepository, FolderRepository
@@ -271,3 +274,112 @@ class DocumentSearchView(APIView):
                 },
             ).data
         )
+
+
+def _column_number(letters: str) -> int:
+    value = 0
+    for letter in letters:
+        value = value * 26 + ord(letter) - ord("A") + 1
+    return value - 1
+
+
+def _amount(value) -> Decimal:
+    """Разбирает введённые суммы и форматированные снимки таблицы."""
+    text = str(value or "").replace(" ", "").replace("\u00a0", "")
+    text = re.sub(r"[^0-9,.-]", "", text).replace(",", ".")
+    try:
+        return Decimal(text) if text and text not in ("-", ".") else Decimal(0)
+    except InvalidOperation:
+        return Decimal(0)
+
+
+def _cargo_rows(document: Document) -> list[dict]:
+    content = document.content if isinstance(document.content, dict) else {}
+    result = []
+    for sheet in content.get("sheets") or []:
+        cells = sheet.get("cells") if isinstance(sheet, dict) else None
+        if not isinstance(cells, dict):
+            continue
+        matrix: dict[int, dict[int, str]] = {}
+        for address, cell in cells.items():
+            match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)", str(address))
+            if not match or not isinstance(cell, dict):
+                continue
+            row_num = int(match.group(2)) - 1
+            col_num = _column_number(match.group(1))
+            matrix.setdefault(row_num, {})[col_num] = str(cell.get("display") or cell.get("value") or "").strip()
+
+        headers = matrix.get(0, {})
+        if not headers:
+            continue
+        labels = {col: label.casefold() for col, label in headers.items()}
+
+        def find_column(*words):
+            return next((col for col, label in labels.items() if any(word in label for word in words)), None)
+
+        status_col = find_column("статус", "status")
+        cargo_col = find_column("груз", "товар", "cargo", "product", "машин", "авто", "рейс")
+        tax_col = find_column("налог", "tax", "пошлин", "%")
+        transit_col = find_column("транзит", "transit", "жол кире")
+        from_col = find_column("откуда", "from")
+        to_col = find_column("куда", "destination", "to")
+        sheet_name = str(sheet.get("name") or "Лист")
+        sheet_label = sheet_name.casefold()
+
+        for row_num, values in matrix.items():
+            if row_num == 0 or not any(values.values()):
+                continue
+            status = values.get(status_col, "").casefold() if status_col is not None else ""
+            delivered = any(word in sheet_label for word in ("достав", "прибыл", "delivered", "arrived")) or any(
+                word in status for word in ("достав", "прибыл", "готово", "delivered", "arrived")
+            )
+            in_transit = any(word in sheet_label for word in ("в пути", "рейс", "груз", "transit")) or any(
+                word in status for word in ("в пути", "отправ", "транзит", "in transit")
+            )
+            if not delivered and not in_transit:
+                continue
+            cargo = values.get(cargo_col, "") if cargo_col is not None else f"Груз · строка {row_num + 1}"
+            if not cargo or cargo.casefold() in ("итого", "всего", "total"):
+                continue
+            tax = _amount(values.get(tax_col, "")) if tax_col is not None else Decimal(0)
+            transit = _amount(values.get(transit_col, "")) if transit_col is not None else Decimal(0)
+            result.append({
+                "document_id": str(document.id),
+                "document_title": document.title,
+                "sheet": sheet_name,
+                "status": "delivered" if delivered else "in_transit",
+                "cargo": cargo,
+                "route": " → ".join(part for part in (
+                    values.get(from_col, "") if from_col is not None else "",
+                    values.get(to_col, "") if to_col is not None else "",
+                ) if part),
+                "tax": str(tax),
+                "transit": str(transit),
+            })
+    return result
+
+
+class AccountantSummaryView(APIView):
+    """Строки грузовых журналов и суммы для рабочего стола бухгалтера."""
+
+    permission_classes = (IsAccountantOrAdmin,)
+
+    def get(self, request):
+        documents = Document.objects.filter(deleted_at__isnull=True).only("id", "title", "content")
+        rows = [row for document in documents for row in _cargo_rows(document)]
+        totals = {
+            "in_transit": {"count": 0, "tax": Decimal(0), "transit": Decimal(0)},
+            "delivered": {"count": 0, "tax": Decimal(0), "transit": Decimal(0)},
+        }
+        for row in rows:
+            group = totals[row["status"]]
+            group["count"] += 1
+            group["tax"] += Decimal(row["tax"])
+            group["transit"] += Decimal(row["transit"])
+        return Response({
+            "rows": rows,
+            "totals": {
+                key: {"count": value["count"], "tax": str(value["tax"]), "transit": str(value["transit"])}
+                for key, value in totals.items()
+            },
+        })

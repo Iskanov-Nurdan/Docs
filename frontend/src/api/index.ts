@@ -3,6 +3,7 @@ import { request, tokens } from './client'
 import type {
   AdminSummary,
   AdminUser,
+  AccountantDashboard,
   Document,
   DocumentSummary,
   Folder,
@@ -61,6 +62,8 @@ export const api = {
   }) => request<AdminUser>('/admin/users/', { method: 'POST', body }),
   updateAdminUser: (id: number, body: { role?: 'admin' | 'accountant' | 'member'; is_active?: boolean }) =>
     request<AdminUser>(`/admin/users/${id}/`, { method: 'PATCH', body }),
+
+  accountantSummary: () => request<AccountantDashboard>('/accountant/summary/'),
 
   // --- Документы ---
   listDocuments: (params: Record<string, string | number | undefined> = {}) =>

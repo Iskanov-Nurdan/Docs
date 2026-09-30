@@ -21,7 +21,7 @@ class DocumentRepository:
         starred = StarredDocument.objects.filter(user=user, document=OuterRef("pk"))
         queryset = self.base_queryset()
 
-        if not (user.is_authenticated and user.is_staff):
+        if not (user.is_authenticated and (user.is_staff or user.is_accountant)):
             queryset = queryset.filter(Q(owner=user) | Q(permissions__user=user))
 
         return queryset.annotate(is_starred=Exists(starred)).distinct()

@@ -32,6 +32,11 @@ class AccessService:
         if user and user.is_authenticated and user.is_staff:
             return Role.OWNER
 
+        # Бухгалтер видит документы организации, но не получает права их
+        # менять. Владельца выше мы уже распознали — свои документы он правит.
+        if user and user.is_authenticated and user.is_accountant:
+            return Role.VIEWER
+
         roles: list[Role] = []
 
         if user and user.is_authenticated:
@@ -72,9 +77,12 @@ class AccessService:
         roles: dict = {}
         rest: list = []
         admin = bool(user.is_staff)
+        accountant = bool(user.is_accountant and not admin)
         for document in documents:
             if admin or document.owner_id == user.id:
                 roles[document.id] = Role.OWNER
+            elif accountant:
+                roles[document.id] = Role.VIEWER
             else:
                 rest.append(document.id)
 

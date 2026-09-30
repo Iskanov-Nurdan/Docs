@@ -246,10 +246,11 @@ export function AppLayout({ title, actions, children }: Props) {
           <button
             type="button"
             onClick={() => void createDocument()}
-            className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90 sm:px-4"
+            aria-label={importing ? 'Открываем таблицу…' : 'Создать таблицу'}
+            className="flex h-10 items-center gap-1.5 rounded-full bg-accent px-2 text-sm font-medium text-white hover:opacity-90 sm:px-4"
           >
             <PlusIcon size={16} />
-            {importing ? 'Открываем…' : 'Создать таблицу'}
+            <span className="hidden sm:inline">{importing ? 'Открываем…' : 'Создать таблицу'}</span>
           </button>
 
           <NotificationsMenu />
@@ -335,7 +336,7 @@ export function AppLayout({ title, actions, children }: Props) {
           </div>
         )}
 
-        <main className="min-w-0 flex-1 px-4 py-5">
+        <main className="min-w-0 flex-1 px-3 py-4 sm:px-4 sm:py-5">
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <h1 className="flex-1 text-xl font-semibold text-ink">{title}</h1>
             {actions}

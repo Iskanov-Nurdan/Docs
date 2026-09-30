@@ -10,3 +10,13 @@ class IsAdmin(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return bool(user and user.is_authenticated and user.is_staff)
+
+
+class IsAccountantOrAdmin(BasePermission):
+    """Общая финансовая сводка доступна бухгалтеру и администраторам."""
+
+    message = "Действие доступно бухгалтеру."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and (user.is_accountant or user.is_staff))
