@@ -46,6 +46,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
     is_active = models.BooleanField("Активен", default=True, db_index=True)
     is_staff = models.BooleanField("Доступ в админку", default=False)
+    is_accountant = models.BooleanField("Роль бухгалтера", default=False)
     email_confirmed = models.BooleanField("Email подтверждён", default=False)
 
     language = models.CharField("Язык интерфейса", max_length=5, default="ru")

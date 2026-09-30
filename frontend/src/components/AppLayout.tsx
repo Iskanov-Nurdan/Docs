@@ -263,6 +263,9 @@ export function AppLayout({ title, actions, children }: Props) {
             }
             className="rounded-full"
             items={[
+              ...(user?.is_accountant
+                ? [{ label: 'Рабочий стол бухгалтера', icon: <SheetIcon size={16} />, onSelect: () => navigate('/accountant') }]
+                : []),
               ...(user?.is_staff
                 ? [
                     {

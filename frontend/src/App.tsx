@@ -12,6 +12,7 @@ import { SettingsPage } from '@/pages/Settings'
 import { AdminPage } from '@/pages/Admin'
 import { PublishedPage } from '@/pages/Published'
 import { EditorPage } from '@/pages/Editor'
+import { AccountantPage } from '@/pages/Accountant'
 import { applyTheme, readTheme, watchSystemTheme } from '@/utils/theme'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
@@ -34,6 +35,13 @@ function Protected({ children }: { children: React.ReactNode }) {
   // иначе обновление страницы выкидывало бы на форму входа.
   if (!initialized) return <p className="p-12 text-center text-ink-muted">Загрузка…</p>
   if (!user) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+function AccountantOnly({ children }: { children: React.ReactNode }) {
+  const { user, initialized } = useAuth()
+  if (!initialized) return <p className="p-12 text-center text-ink-muted">Загрузка…</p>
+  if (!user?.is_accountant && !user?.is_staff) return <Navigate to="/documents" replace />
   return <>{children}</>
 }
 
@@ -160,6 +168,7 @@ export function App() {
               </Protected>
             }
           />
+          <Route path="/accountant" element={<Protected><AccountantOnly><AccountantPage /></AccountantOnly></Protected>} />
 
           {/* Прежние адреса: ссылки на документы уже разошлись по почте. */}
           <Route path="/docs" element={<Navigate to="/documents" replace />} />

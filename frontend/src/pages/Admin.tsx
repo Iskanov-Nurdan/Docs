@@ -19,12 +19,14 @@ import type { AdminSummary, AdminUser } from '@/types'
 
 const ROLES = [
   { value: 'member', label: 'Пользователь', hint: 'Работает со своими таблицами' },
+  { value: 'accountant', label: 'Бухгалтер', hint: 'Рабочая панель и свои таблицы' },
   { value: 'admin', label: 'Администратор', hint: 'Видит людей и закрывает доступ' },
 ]
 
 const ROLE_LABELS: Record<AdminUser['role'], string> = {
   owner: 'Главный админ',
   admin: 'Администратор',
+  accountant: 'Бухгалтер',
   member: 'Пользователь',
 }
 
@@ -64,7 +66,7 @@ export function AdminPage() {
     return () => window.clearTimeout(timer)
   }, [load, query])
 
-  const apply = async (target: AdminUser, patch: { role?: 'admin' | 'member'; is_active?: boolean }) => {
+  const apply = async (target: AdminUser, patch: { role?: 'admin' | 'accountant' | 'member'; is_active?: boolean }) => {
     setError('')
     setNotice('')
     try {
@@ -234,7 +236,7 @@ export function AdminPage() {
                         value={person.role}
                         options={ROLES}
                         disabled={!isSuperuser}
-                        onChange={(role) => apply(person, { role: role as 'admin' | 'member' })}
+                        onChange={(role) => apply(person, { role: role as 'admin' | 'accountant' | 'member' })}
                       />
                     )}
                   </td>

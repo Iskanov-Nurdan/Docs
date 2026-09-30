@@ -49,13 +49,14 @@ export type User = {
   email_confirmed?: boolean
   /** Доступ в административную часть. */
   is_staff?: boolean
+  is_accountant?: boolean
   /** Главный админ: назначает и снимает администраторов. */
   is_superuser?: boolean
   created_at?: string
 }
 
 /** Уровень прав в системе. Не путать с ролью в документе. */
-export type AdminRole = 'owner' | 'admin' | 'member'
+export type AdminRole = 'owner' | 'admin' | 'accountant' | 'member'
 
 export type AdminUser = {
   id: number

@@ -51,7 +51,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
     def get_role(self, user: User) -> str:
         if user.is_superuser:
             return "owner"
-        return "admin" if user.is_staff else "member"
+        return "admin" if user.is_staff else "accountant" if user.is_accountant else "member"
 
 
 class AdminUserCreateSerializer(serializers.Serializer):
@@ -61,7 +61,7 @@ class AdminUserCreateSerializer(serializers.Serializer):
     password = serializers.CharField(max_length=128, min_length=8)
     first_name = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
     last_name = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
-    role = serializers.ChoiceField(choices=["member", "admin"], required=False, default="member")
+    role = serializers.ChoiceField(choices=["member", "accountant", "admin"], required=False, default="member")
 
     def validate_email(self, value: str) -> str:
         return value.strip().lower()
@@ -80,7 +80,7 @@ class AdminUserCreateSerializer(serializers.Serializer):
 class AdminUserUpdateSerializer(serializers.Serializer):
     """Меняется одно из двух: уровень прав или доступ в систему."""
 
-    role = serializers.ChoiceField(choices=["member", "admin"], required=False)
+    role = serializers.ChoiceField(choices=["member", "accountant", "admin"], required=False)
     is_active = serializers.BooleanField(required=False)
 
     def validate(self, attrs):
@@ -115,8 +115,8 @@ class AdminService:
         }
 
     def create(self, *, actor: User, data: dict) -> User:
-        if data["role"] == "admin" and not actor.is_superuser:
-            raise AccessDeniedError("Назначать администраторов может только главный админ.")
+        if data["role"] in ("admin", "accountant") and not actor.is_superuser:
+            raise AccessDeniedError("Назначать специальные роли может только главный админ.")
         if User.objects.filter(email=data["email"]).exists():
             raise BusinessError("Пользователь с таким email уже заведён.", code="email_taken")
 
@@ -131,7 +131,8 @@ class AdminService:
         # он же и передаёт пароль — письмо здесь ничего не проверяет.
         user.email_confirmed = True
         user.is_staff = data["role"] == "admin"
-        user.save(update_fields=["email_confirmed", "is_staff", "updated_at"])
+        user.is_accountant = data["role"] == "accountant"
+        user.save(update_fields=["email_confirmed", "is_staff", "is_accountant", "updated_at"])
 
         logger.info("Администратор %s завёл пользователя %s", actor.email, user.email)
         return user
@@ -147,6 +148,7 @@ class AdminService:
                 raise BusinessError("Права главного админа снимаются только в консоли сервера.",
                                      code="superuser_protected")
             target.is_staff = data["role"] == "admin"
+            target.is_accountant = data["role"] == "accountant"
 
         if "is_active" in data:
             if actor.id == target.id:
@@ -162,7 +164,7 @@ class AdminService:
                 raise AccessDeniedError("Закрыть доступ администратору может только главный админ.")
             target.is_active = data["is_active"]
 
-        target.save(update_fields=["is_staff", "is_active", "updated_at"])
+        target.save(update_fields=["is_staff", "is_accountant", "is_active", "updated_at"])
         return target
 
 

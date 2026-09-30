@@ -26,8 +26,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "email", "first_name", "last_name", "display_name", "avatar",
                   "language", "theme", "email_notifications", "editor_settings",
-                  "cursor_color", "email_confirmed", "is_staff", "is_superuser", "created_at")
-        read_only_fields = ("id", "email", "email_confirmed", "is_staff", "is_superuser",
+                  "cursor_color", "email_confirmed", "is_staff", "is_superuser", "is_accountant", "created_at")
+        read_only_fields = ("id", "email", "email_confirmed", "is_staff", "is_superuser", "is_accountant",
                             "created_at")
 
 

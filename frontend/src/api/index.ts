@@ -57,9 +57,9 @@ export const api = {
     password: string
     first_name?: string
     last_name?: string
-    role?: 'member' | 'admin'
+    role?: 'member' | 'accountant' | 'admin'
   }) => request<AdminUser>('/admin/users/', { method: 'POST', body }),
-  updateAdminUser: (id: number, body: { role?: 'admin' | 'member'; is_active?: boolean }) =>
+  updateAdminUser: (id: number, body: { role?: 'admin' | 'accountant' | 'member'; is_active?: boolean }) =>
     request<AdminUser>(`/admin/users/${id}/`, { method: 'PATCH', body }),
 
   // --- Документы ---

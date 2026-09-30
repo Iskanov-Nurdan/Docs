@@ -17,6 +17,7 @@ import type { AdminUser } from '@/types'
 
 const ROLES = [
   { value: 'member', label: 'Пользователь', hint: 'Работает со своими таблицами' },
+  { value: 'accountant', label: 'Бухгалтер', hint: 'Рабочая панель и доступ к своим таблицам' },
   { value: 'admin', label: 'Администратор', hint: 'Видит людей и закрывает доступ' },
 ]
 
@@ -39,7 +40,7 @@ export function NewUserDialog({ canCreateAdmins, onCreated, onClose }: Props) {
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [password, setPassword] = useState(generatePassword)
-  const [role, setRole] = useState<'member' | 'admin'>('member')
+  const [role, setRole] = useState<'member' | 'accountant' | 'admin'>('member')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<AdminUser | null>(null)
@@ -176,7 +177,7 @@ export function NewUserDialog({ canCreateAdmins, onCreated, onClose }: Props) {
             label="Уровень прав"
             value={role}
             options={canCreateAdmins ? ROLES : ROLES.slice(0, 1)}
-            onChange={(next) => setRole(next as 'member' | 'admin')}
+            onChange={(next) => setRole(next as 'member' | 'accountant' | 'admin')}
             block
           />
           {!canCreateAdmins && (
