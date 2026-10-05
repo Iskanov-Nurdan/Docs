@@ -95,6 +95,7 @@ export type AccountantRow = {
 }
 
 export type AccountantDashboard = {
+  documents: { id: string; title: string }[]
   rows: AccountantRow[]
   totals: Record<'delivered' | 'in_transit', { count: number; tax: string; transit: string }>
 }

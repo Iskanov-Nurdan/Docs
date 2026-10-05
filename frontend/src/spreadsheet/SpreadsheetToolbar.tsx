@@ -303,7 +303,7 @@ export function SpreadsheetToolbar({
 
       <ToolbarButton
         label={<SearchIcon size={17} />}
-        title="Найти и заменить (Ctrl+F)"
+        title="Найти и заменить (Ctrl+F, на Mac ⌘F)"
         onClick={onFind}
       />
     </div>

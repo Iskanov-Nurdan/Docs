@@ -215,6 +215,20 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
   }, [loadRate])
   const [matches, setMatches] = useState<CellHit[]>([])
 
+  // Ctrl/⌘+F ловим на всей странице, а не только внутри таблицы: пока фокус на
+  // теле страницы (после загрузки он там), Safari открывал свой поиск, а он
+  // видит лишь отрисованные ячейки.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setFinding(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   useEffect(() => {
     const bump = () => setVersion((value) => value + 1)
     doc.on('update', bump)

@@ -365,7 +365,11 @@ class AccountantSummaryView(APIView):
     permission_classes = (IsAccountantOrAdmin,)
 
     def get(self, request):
-        documents = Document.objects.filter(deleted_at__isnull=True).only("id", "title", "content")
+        documents = list(
+            Document.objects.filter(deleted_at__isnull=True)
+            .only("id", "title", "content")
+            .order_by("-created_at")
+        )
         rows = [row for document in documents for row in _cargo_rows(document)]
         totals = {
             "in_transit": {"count": 0, "tax": Decimal(0), "transit": Decimal(0)},
@@ -377,6 +381,9 @@ class AccountantSummaryView(APIView):
             group["tax"] += Decimal(row["tax"])
             group["transit"] += Decimal(row["transit"])
         return Response({
+            # Все таблицы, а не только те, где нашлись грузы: бухгалтер выбирает
+            # из полного списка, а у таблицы без грузовых колонок просто пусто.
+            "documents": [{"id": str(document.id), "title": document.title} for document in documents],
             "rows": rows,
             "totals": {
                 key: {"count": value["count"], "tax": str(value["tax"]), "transit": str(value["transit"])}

@@ -53,8 +53,9 @@ fi
 
 step "Сравниваем с тем, что лежит на сервере"
 
+export LC_ALL=C
 LOCAL_LIST="$(cd web && find . -type f | sort)"
-REMOTE_LIST="$(ssh "$SERVER" "cd '$REMOTE_DIR/web' 2>/dev/null && find . -type f | sort || true")"
+REMOTE_LIST="$(ssh "$SERVER" "cd '$REMOTE_DIR/web' 2>/dev/null && find . -type f | LC_ALL=C sort || true")"
 
 # Есть на сервере, но нет в новой сборке — устарело.
 STALE="$(comm -13 <(echo "$LOCAL_LIST") <(echo "$REMOTE_LIST") | sed '/^$/d' || true)"
