@@ -8,7 +8,6 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.exceptions import AccessDeniedError, BusinessError, NotFoundError
@@ -32,17 +31,14 @@ class AccessService:
         if user and user.is_authenticated and user.is_staff:
             return Role.OWNER
 
-        # Бухгалтер видит документы организации, но не получает права их
-        # менять. Владельца выше мы уже распознали — свои документы он правит.
-        if user and user.is_authenticated and user.is_accountant:
-            return Role.VIEWER
+        # Таблицы в конторе общие: любой вошедший сотрудник (обычный, бухгалтер)
+        # видит и правит документы остальных. Владельцем он от этого не
+        # становится — раздавать доступ, удалять и закрывать скачивание по-прежнему
+        # может только владелец или администратор.
+        if user and user.is_authenticated:
+            return Role.EDITOR
 
         roles: list[Role] = []
-
-        if user and user.is_authenticated:
-            permission = document.permissions.filter(user=user).first()
-            if permission:
-                roles.append(Role(permission.role))
 
         link_role = self._role_from_link(document, link_token)
         if link_role:
@@ -74,25 +70,11 @@ class AccessService:
         if not user or not user.is_authenticated:
             return {}
 
-        roles: dict = {}
-        rest: list = []
         admin = bool(user.is_staff)
-        accountant = bool(user.is_accountant and not admin)
-        for document in documents:
-            if admin or document.owner_id == user.id:
-                roles[document.id] = Role.OWNER
-            elif accountant:
-                roles[document.id] = Role.VIEWER
-            else:
-                rest.append(document.id)
-
-        if rest:
-            granted = DocumentPermission.objects.filter(
-                user=user, document_id__in=rest
-            ).values_list("document_id", "role")
-            for document_id, role in granted:
-                roles[document_id] = Role(role)
-        return roles
+        return {
+            document.id: Role.OWNER if admin or document.owner_id == user.id else Role.EDITOR
+            for document in documents
+        }
 
     def require(self, *, user, document: Document, minimum: Role,
                 link_token: str | None = None) -> Role:
@@ -126,10 +108,8 @@ class AccessService:
         return role == Role.OWNER or document.allow_print
 
     def accessible_documents(self, user):
-        """Документы, которые пользователь вправе видеть в списке."""
-        return Document.objects.filter(
-            Q(owner=user) | Q(permissions__user=user)
-        ).distinct()
+        """Документы, которые пользователь вправе видеть в списке: все."""
+        return Document.objects.all()
 
     @transaction.atomic
     def grant(self, *, actor, document: Document, target_user, role: Role) -> DocumentPermission:

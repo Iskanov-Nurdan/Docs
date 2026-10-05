@@ -10,19 +10,16 @@ class DocumentRepository:
         return Document.objects.select_related("owner", "folder", "last_edited_by")
 
     def visible_to(self, user) -> QuerySet[Document]:
-        """Свои документы и те, к которым выдан доступ.
+        """Все документы организации — любому вошедшему пользователю.
 
-        Администратору видно всё. Это его работа: разобраться, куда делась
-        таблица, посмотреть чужой журнал, когда человек в отпуске, забрать
-        документы уволившегося. Прятать их от того, кто и так заводит учётные
-        записи и раздаёт права, смысла нет — он всё равно доберётся, только
-        дольше и через базу.
+        Таблицы в конторе общие: журнал ведёт один человек, а правит и смотрит
+        другой. Закрытыми остаются только удалённые — они в корзине владельца.
         """
         starred = StarredDocument.objects.filter(user=user, document=OuterRef("pk"))
         queryset = self.base_queryset()
 
-        if not (user.is_authenticated and (user.is_staff or user.is_accountant)):
-            queryset = queryset.filter(Q(owner=user) | Q(permissions__user=user))
+        if not user.is_authenticated:
+            queryset = queryset.none()
 
         return queryset.annotate(is_starred=Exists(starred)).distinct()
 
