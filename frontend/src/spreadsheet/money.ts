@@ -12,12 +12,25 @@
  * пересчиталась бы второй раз и уехала.
  */
 import type * as Y from 'yjs'
-import { applyStyle, findColumn, writeCell, type NumberFormat, type SheetMap } from './model'
+import { applyStyle, findColumn, readRaw, writeCell, type NumberFormat, type SheetMap } from './model'
 
 /** Заголовки денежных колонок. Как и везде, сверка по началу заголовка. */
 const COLUMNS = {
-  amount: ['сумма', 'стоимость', 'цена', 'оплата', 'баасы', 'сом'],
+  amount: [
+    'сумма', 'стоимость', 'цена', 'оплата', 'баасы', 'сом',
+    // Колонки учёта рейса: доход, расходы и итоги.
+    'доход', 'расход', 'общий расход', 'прибыль', 'ущерб',
+    'шапка', 'жолгира', 'доп жолгира', 'разрешение', 'асевой', 'пастой',
+  ],
+  // Налог называют в сомах, как и сумму, а считают в долларах.
+  tax: ['налог', 'tax'],
   transit: ['транзит', 'transit'],
+}
+
+/** Заголовок колонки начинается с одного из слов. Колонок с деньгами может быть много. */
+const headerStartsWith = (sheet: SheetMap, col: number, prefixes: string[]) => {
+  const header = (readRaw(sheet, 0, col) ?? '').trim().toLowerCase()
+  return header !== '' && prefixes.some((prefix) => header.startsWith(prefix))
 }
 
 /**
@@ -39,13 +52,16 @@ export function transitChoices(amounts: Array<{ amount: string }>): string[] {
 }
 
 export const isAmountColumn = (sheet: SheetMap, col: number) =>
-  findColumn(sheet, COLUMNS.amount) === col
+  headerStartsWith(sheet, col, COLUMNS.amount)
+
+export const isTaxColumn = (sheet: SheetMap, col: number) =>
+  headerStartsWith(sheet, col, COLUMNS.tax)
 
 export const isTransitColumn = (sheet: SheetMap, col: number) =>
   findColumn(sheet, COLUMNS.transit) === col
 
 export const isMoneyColumn = (sheet: SheetMap, col: number) =>
-  isAmountColumn(sheet, col) || isTransitColumn(sheet, col)
+  isAmountColumn(sheet, col) || isTaxColumn(sheet, col) || isTransitColumn(sheet, col)
 
 /** Итог записи: о пересчёте человеку нужно сказать, остальное молча. */
 export type MoneyWrite =

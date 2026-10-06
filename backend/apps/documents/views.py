@@ -317,14 +317,38 @@ def _cargo_rows(document: Document) -> list[dict]:
         def find_column(*words):
             return next((col for col, label in labels.items() if any(word in label for word in words)), None)
 
+        def find_in_order(*words):
+            """Колонка по первому подошедшему слову: «общий расход» важнее просто «расхода»."""
+            for word in words:
+                col = next((col for col, label in labels.items() if word in label), None)
+                if col is not None:
+                    return col
+            return None
+
         status_col = find_column("статус", "status")
-        cargo_col = find_column("груз", "товар", "cargo", "product", "машин", "авто", "рейс")
+        # «ТИП Перегрузка» содержит «груз», но грузом не называется.
+        cargo_col = next(
+            (col for col, label in labels.items()
+             if "перегруз" not in label
+             and any(word in label for word in ("груз", "товар", "cargo", "product", "маш", "авто", "рейс"))),
+            None,
+        )
+        transit_col = find_column("транзит", "transit", "tranzit", "жол кире")
         tax_col = find_column("налог", "tax", "пошлин", "%")
-        transit_col = find_column("транзит", "transit", "жол кире")
+        # «TRANZIT 04%» — транзит, а не налог, хотя в заголовке есть «%».
+        if tax_col is not None and tax_col == transit_col:
+            tax_col = find_column("налог", "tax", "пошлин")
+        income_col = find_column("стоимость", "доход", "выручк")
+        expense_col = find_in_order("общий расход", "общие расход", "итого расход", "расход")
+        profit_col = find_column("прибыл", "profit")
+        loss_col = find_column("ущерб", "убыт")
         from_col = find_column("откуда", "from")
         to_col = find_column("куда", "destination", "to")
         sheet_name = str(sheet.get("name") or "Лист")
         sheet_label = sheet_name.casefold()
+
+        def money(col, values) -> Decimal:
+            return _amount(values.get(col, "")) if col is not None else Decimal(0)
 
         for row_num, values in matrix.items():
             if row_num == 0 or not any(values.values()):
@@ -336,25 +360,32 @@ def _cargo_rows(document: Document) -> list[dict]:
             in_transit = any(word in sheet_label for word in ("в пути", "рейс", "груз", "transit")) or any(
                 word in status for word in ("в пути", "отправ", "транзит", "in transit")
             )
-            if not delivered and not in_transit:
+            amounts = {
+                "tax": money(tax_col, values),
+                "transit": money(transit_col, values),
+                "income": money(income_col, values),
+                "expense": money(expense_col, values),
+                "profit": money(profit_col, values),
+                "loss": money(loss_col, values),
+            }
+            # Строка без статуса не теряется, если в ней есть деньги: так
+            # считаются таблицы, где статус не ведут (учёт по машинам).
+            if not delivered and not in_transit and not any(amounts.values()):
                 continue
             cargo = values.get(cargo_col, "") if cargo_col is not None else f"Груз · строка {row_num + 1}"
             if not cargo or cargo.casefold() in ("итого", "всего", "total"):
                 continue
-            tax = _amount(values.get(tax_col, "")) if tax_col is not None else Decimal(0)
-            transit = _amount(values.get(transit_col, "")) if transit_col is not None else Decimal(0)
             result.append({
                 "document_id": str(document.id),
                 "document_title": document.title,
                 "sheet": sheet_name,
-                "status": "delivered" if delivered else "in_transit",
+                "status": "delivered" if delivered else "in_transit" if in_transit else "other",
                 "cargo": cargo,
                 "route": " → ".join(part for part in (
                     values.get(from_col, "") if from_col is not None else "",
                     values.get(to_col, "") if to_col is not None else "",
                 ) if part),
-                "tax": str(tax),
-                "transit": str(transit),
+                **{key: str(value) for key, value in amounts.items()},
             })
     return result
 
@@ -371,22 +402,23 @@ class AccountantSummaryView(APIView):
             .order_by("-created_at")
         )
         rows = [row for document in documents for row in _cargo_rows(document)]
+        keys = ("tax", "transit", "income", "expense", "profit", "loss")
         totals = {
-            "in_transit": {"count": 0, "tax": Decimal(0), "transit": Decimal(0)},
-            "delivered": {"count": 0, "tax": Decimal(0), "transit": Decimal(0)},
+            status: {"count": 0, **{key: Decimal(0) for key in keys}}
+            for status in ("in_transit", "delivered", "other")
         }
         for row in rows:
             group = totals[row["status"]]
             group["count"] += 1
-            group["tax"] += Decimal(row["tax"])
-            group["transit"] += Decimal(row["transit"])
+            for key in keys:
+                group[key] += Decimal(row[key])
         return Response({
             # Все таблицы, а не только те, где нашлись грузы: бухгалтер выбирает
             # из полного списка, а у таблицы без грузовых колонок просто пусто.
             "documents": [{"id": str(document.id), "title": document.title} for document in documents],
             "rows": rows,
             "totals": {
-                key: {"count": value["count"], "tax": str(value["tax"]), "transit": str(value["transit"])}
-                for key, value in totals.items()
+                status: {"count": value["count"], **{key: str(value[key]) for key in keys}}
+                for status, value in totals.items()
             },
         })

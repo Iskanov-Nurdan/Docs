@@ -83,21 +83,31 @@ export type AdminSummary = {
   trashed: number
 }
 
-export type AccountantRow = {
+export type AccountantStatus = 'delivered' | 'in_transit' | 'other'
+
+/** Денежные поля строки журнала — всё в долларах. */
+export type AccountantAmounts = {
+  tax: string
+  transit: string
+  income: string
+  expense: string
+  profit: string
+  loss: string
+}
+
+export type AccountantRow = AccountantAmounts & {
   document_id: string
   document_title: string
   sheet: string
-  status: 'delivered' | 'in_transit'
+  status: AccountantStatus
   cargo: string
   route: string
-  tax: string
-  transit: string
 }
 
 export type AccountantDashboard = {
   documents: { id: string; title: string }[]
   rows: AccountantRow[]
-  totals: Record<'delivered' | 'in_transit', { count: number; tax: string; transit: string }>
+  totals: Record<AccountantStatus, AccountantAmounts & { count: number }>
 }
 
 export type Folder = {
