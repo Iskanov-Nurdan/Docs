@@ -58,6 +58,10 @@ type Props = {
   onCharts: () => void
   /** Отметить прибытие машины в строке под курсором. */
   onArrived: () => void
+  /** Что отметит «Прибыл» сейчас: «Прошёл Нарын» или просто «Прибыл». */
+  arrivedLabel: string
+  /** Груз переложили на другую машину — перегруз строки под курсором. */
+  onTransfer: () => void
   /** Посчитать сроки прибытия по всей таблице. */
   onFillArrivals: () => void
   /** Выбрать файл Excel или CSV и перенести его листы в книгу. */
@@ -81,6 +85,8 @@ export function SpreadsheetToolbar({
   onToggleFreeze,
   onCharts,
   onArrived,
+  arrivedLabel,
+  onTransfer,
   onFillArrivals,
   onImport,
 }: Props) {
@@ -195,7 +201,23 @@ export function SpreadsheetToolbar({
         ].join(' ')}
       >
         <CheckIcon size={16} />
-        Прибыл
+        {arrivedLabel}
+      </button>
+
+      {/* Перегруз — рядом с приёмкой: это тоже конец пути машины, только
+          груз едет дальше на другой. */}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onTransfer}
+        title="Перегруз: груз из текущей строки переложили на другую машину"
+        className={[
+          'flex shrink-0 items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5',
+          'text-sm text-ink hover:bg-surface-muted disabled:opacity-40',
+        ].join(' ')}
+      >
+        <RouteIcon size={16} />
+        Перегруз
       </button>
 
       {/* Кнопка со словом, а не значком: это главный способ добавить запись,

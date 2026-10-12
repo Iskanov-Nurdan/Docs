@@ -102,6 +102,8 @@ export type AccountantRow = AccountantAmounts & {
   status: AccountantStatus
   cargo: string
   route: string
+  /** Плечо до перегруза: деньги его, а груз посчитан строкой другой машины. */
+  transshipped?: boolean
 }
 
 export type AccountantDashboard = {

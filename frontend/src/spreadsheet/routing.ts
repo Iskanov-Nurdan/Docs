@@ -11,11 +11,11 @@
 import type * as Y from 'yjs'
 import { hoursBetween } from '@/store/routes'
 import type { RouteLeg } from '@/types'
-import { findColumn, readRaw, writeCell, type SheetMap } from './model'
-import { parseDeadline } from './statuses'
+import { ARRIVAL_COLUMNS, findColumn, readRaw, writeCell, type SheetMap } from './model'
+import { parseDeadline, statusTone } from './statuses'
 
 /** Заголовки колонок, по которым собирается расчёт. */
-const COLUMNS = {
+export const ROUTE_COLUMNS = {
   from: ['откуда', 'пункт отправ', 'отправление', 'from', 'кайдан'],
   to: ['куда', 'пункт назнач', 'назначение', 'to', 'кайда'],
   // «Транзит» отсюда убран намеренно: теперь так называется денежная
@@ -142,9 +142,9 @@ export function fillArrival(doc: Y.Doc, sheet: SheetMap, row: number,
                             legs: RouteLeg[]): ArrivalResult {
   if (row <= 0) return { kind: 'skip', reason: 'нет колонок' }
 
-  const fromCol = findColumn(sheet, COLUMNS.from)
-  const toCol = findColumn(sheet, COLUMNS.to)
-  const arrivalCol = findColumn(sheet, COLUMNS.arrival)
+  const fromCol = findColumn(sheet, ROUTE_COLUMNS.from)
+  const toCol = findColumn(sheet, ROUTE_COLUMNS.to)
+  const arrivalCol = findColumn(sheet, ROUTE_COLUMNS.arrival)
   if (fromCol === null || toCol === null || arrivalCol === null) {
     return { kind: 'skip', reason: 'нет колонок' }
   }
@@ -154,7 +154,7 @@ export function fillArrival(doc: Y.Doc, sheet: SheetMap, row: number,
   if (!from || !to) return { kind: 'skip', reason: 'нет точек' }
 
   // Точки по пути учитываются, если для них заведена колонка.
-  const viaCol = findColumn(sheet, COLUMNS.via)
+  const viaCol = findColumn(sheet, ROUTE_COLUMNS.via)
   const via = viaCol === null ? [] : parseVia(readRaw(sheet, row, viaCol) ?? '')
 
   const hours = routeHours(legs, from, via, to)
@@ -166,7 +166,7 @@ export function fillArrival(doc: Y.Doc, sheet: SheetMap, row: number,
   if (current) return { kind: 'skip', reason: 'срок уже стоит' }
 
   const departure = departureMoment(sheet, row,
-    findColumn(sheet, COLUMNS.date), findColumn(sheet, COLUMNS.departure))
+    findColumn(sheet, ROUTE_COLUMNS.date), findColumn(sheet, ROUTE_COLUMNS.departure))
 
   // Ни даты, ни времени выезда — значит машина выходит сейчас: запись заводят
   // в тот момент, когда она уезжает. Отказывать здесь нечестно: человек уже
@@ -208,18 +208,18 @@ export function fillAllArrivals(doc: Y.Doc, sheet: SheetMap, legs: RouteLeg[],
 
 /** Правка какой колонки должна запускать пересчёт срока. */
 export function affectsArrival(sheet: SheetMap, col: number): boolean {
-  return [COLUMNS.from, COLUMNS.to, COLUMNS.via, COLUMNS.date, COLUMNS.departure]
+  return [ROUTE_COLUMNS.from, ROUTE_COLUMNS.to, ROUTE_COLUMNS.via, ROUTE_COLUMNS.date, ROUTE_COLUMNS.departure]
     .some((prefixes) => findColumn(sheet, prefixes) === col)
 }
 
 /** Названия точек для выбора в ячейке: то, что заведено в справочнике. */
 export function isRoutePointColumn(sheet: SheetMap, col: number): boolean {
-  return findColumn(sheet, COLUMNS.from) === col || findColumn(sheet, COLUMNS.to) === col
+  return findColumn(sheet, ROUTE_COLUMNS.from) === col || findColumn(sheet, ROUTE_COLUMNS.to) === col
 }
 
 /** Колонка промежуточных точек, если она заведена. */
 export function viaColumn(sheet: SheetMap): number | null {
-  return findColumn(sheet, COLUMNS.via)
+  return findColumn(sheet, ROUTE_COLUMNS.via)
 }
 
 // ----------------------------- Точки по пути -----------------------------
@@ -257,11 +257,132 @@ export const formatCheckpoints = (items: Checkpoint[]) =>
 
 /** Все точки маршрута по порядку, кроме той, откуда выехали. */
 export function routePoints(sheet: SheetMap, row: number): string[] {
-  const toCol = findColumn(sheet, COLUMNS.to)
-  const viaCol = findColumn(sheet, COLUMNS.via)
+  const toCol = findColumn(sheet, ROUTE_COLUMNS.to)
+  const viaCol = findColumn(sheet, ROUTE_COLUMNS.via)
   const via = viaCol === null ? [] : parseVia(readRaw(sheet, row, viaCol) ?? '')
   const to = toCol === null ? '' : (readRaw(sheet, row, toCol) ?? '').trim()
   return [...via, to].filter(Boolean)
+}
+
+// ------------------------------ Ход рейса ------------------------------
+
+/** Точка маршрута глазами диспетчера: прошли, едем сюда сейчас или впереди. */
+export type RouteStop = {
+  place: string
+  /** Номер точки по порядку: 1 — первая после выезда. */
+  order: number
+  final: boolean
+  state: 'passed' | 'next' | 'ahead'
+  /** У пройденной — кто и когда отметил: «Асан, 12.10 15:20». */
+  note: string
+  /** Когда ждать машину. null — посчитать не из чего. */
+  eta: Date | null
+}
+
+export type RouteProgress = {
+  origin: string
+  stops: RouteStop[]
+  /** Рейс закрыт: приехал, груз перегружен на другую машину или отменён. */
+  closed: 'arrived' | 'transferred' | 'cancelled' | null
+}
+
+/** «12.10 15:20» из отметки о прохождении — год берём текущий. */
+function stampMoment(note: string, now: Date): Date | null {
+  const match = /(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})/.exec(note)
+  if (!match) return null
+  const moment = new Date(now.getFullYear(), Number(match[2]) - 1, Number(match[1]),
+                          Number(match[3]), Number(match[4]))
+  // Отметка из конца декабря, разглядываемая в январе, — прошлогодняя.
+  if (moment.getTime() - now.getTime() > 180 * 24 * 3600 * 1000) {
+    moment.setFullYear(moment.getFullYear() - 1)
+  }
+  return moment
+}
+
+/**
+ * Ход рейса по строке: откуда вышел, какие точки по порядку уже пройдены,
+ * куда машина едет сейчас и когда её ждать в каждой следующей.
+ *
+ * Кнопка «Прибыл» отмечает точки по одной, и без этой картины работники не
+ * понимали, что именно она отметит на этот раз. null — в строке нет рейса.
+ */
+export function routeProgress(sheet: SheetMap, row: number, legs: RouteLeg[],
+                              now: Date = new Date()): RouteProgress | null {
+  if (row <= 0) return null
+  const fromCol = findColumn(sheet, ROUTE_COLUMNS.from)
+  const toCol = findColumn(sheet, ROUTE_COLUMNS.to)
+  if (fromCol === null || toCol === null) return null
+
+  const origin = (readRaw(sheet, row, fromCol) ?? '').trim()
+  const points = routePoints(sheet, row)
+  if (!origin || points.length === 0) return null
+
+  const statusCol = findColumn(sheet, ARRIVAL_COLUMNS.status)
+  const kind = statusCol === null ? undefined : statusTone(readRaw(sheet, row, statusCol))?.kind
+  const closed = kind === 'done' ? 'arrived'
+    : kind === 'transferred' ? 'transferred'
+      : kind === 'cancelled' ? 'cancelled'
+        : null
+
+  const passedCol = findColumn(sheet, ROUTE_COLUMNS.passed)
+  const passed = passedCol === null ? [] : parseCheckpoints(readRaw(sheet, row, passedCol) ?? '')
+  const passedAt = (place: string) =>
+    passed.find((item) => item.place.toLowerCase() === place.toLowerCase())
+
+  // Отсчёт времени — от последней пройденной точки, а если таких нет, от выезда.
+  let anchorPlace = origin
+  let anchor = departureMoment(sheet, row,
+    findColumn(sheet, ROUTE_COLUMNS.date), findColumn(sheet, ROUTE_COLUMNS.departure))
+  for (const point of points) {
+    const item = passedAt(point)
+    if (!item) continue
+    anchorPlace = point
+    anchor = stampMoment(item.note, now) ?? anchor
+  }
+
+  const arrivalCol = findColumn(sheet, ROUTE_COLUMNS.arrival)
+  const agreed = arrivalCol === null ? null : parseDeadline(readRaw(sheet, row, arrivalCol), now)
+
+  let nextFound = false
+  let elapsed = 0
+  let previous = anchorPlace
+
+  const stops = points.map((place, index): RouteStop => {
+    const final = index === points.length - 1
+    const item = passedAt(place)
+    const isPassed = Boolean(item) || closed === 'arrived'
+
+    // Без колонки «Пройдено» точки по пути отметить некуда, и «Прибыл»
+    // сразу закрывает рейс — значит, следующий шаг здесь конечная точка.
+    const markable = final || passedCol !== null
+
+    let state: RouteStop['state'] = 'ahead'
+    if (isPassed) state = 'passed'
+    else if (!nextFound && !closed && markable) {
+      state = 'next'
+      nextFound = true
+    }
+
+    let eta: Date | null = null
+    // У закрытого рейса ждать нечего: он приехал, отменён или груз уже
+    // на другой машине.
+    if (!isPassed && !closed) {
+      const hours = previous && anchor ? hoursBetween(legs, previous, place) : null
+      if (hours === null) {
+        previous = ''
+      } else {
+        elapsed += hours
+        eta = new Date((anchor as Date).getTime() + elapsed * 3600 * 1000)
+        previous = place
+      }
+      // Срок в колонке «Прибытие» — договорённость, она важнее норматива.
+      if (final && agreed) eta = agreed
+    }
+
+    return { place, order: index + 1, final, state, note: item?.note ?? '', eta }
+  })
+
+  return { origin, stops, closed }
 }
 
 export type CheckpointResult =
@@ -284,7 +405,7 @@ export function passCheckpoint(doc: Y.Doc, sheet: SheetMap, row: number,
   const points = routePoints(sheet, row)
   if (points.length === 0) return { kind: 'none' }
 
-  const passedCol = findColumn(sheet, COLUMNS.passed)
+  const passedCol = findColumn(sheet, ROUTE_COLUMNS.passed)
   const passed = passedCol === null
     ? []
     : parseCheckpoints(readRaw(sheet, row, passedCol) ?? '')
@@ -309,7 +430,7 @@ export function passCheckpoint(doc: Y.Doc, sheet: SheetMap, row: number,
       formatCheckpoints([...passed, { place: next, note }]))
 
     // Срок до конца пути — от факта прохождения точки.
-    const arrivalCol = findColumn(sheet, COLUMNS.arrival)
+    const arrivalCol = findColumn(sheet, ROUTE_COLUMNS.arrival)
     const rest = routeHours(legs, next, left.slice(0, -1), left[left.length - 1] ?? '')
     if (arrivalCol !== null && rest !== null) {
       arrival = formatMoment(new Date(now.getTime() + rest * 3600 * 1000))

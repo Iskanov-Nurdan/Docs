@@ -14,10 +14,22 @@ import { DocumentProvider } from '@/websocket/provider'
 import type { Document, EditorMode, Presence, SaveStatus } from '@/types'
 import { Grid } from './Grid'
 import { SheetFind } from './SheetFind'
+import { TransferDialog } from './TransferDialog'
+import {
+  DRIVER_COLUMNS,
+  isTransferred,
+  moveCargoChain,
+  transferBlocker,
+  transferCargo,
+  transferPlaces,
+} from './transfer'
 import { SheetTabs } from './SheetTabs'
 import { AddRowDialog } from './AddRowDialog'
 import { ChartsDialog } from './ChartsDialog'
-import { affectsArrival, fillAllArrivals, fillArrival, passCheckpoint } from './routing'
+import {
+  ROUTE_COLUMNS, affectsArrival, fillAllArrivals, fillArrival, passCheckpoint, routeProgress,
+} from './routing'
+import { RouteProgress } from './RouteProgress'
 import { SpreadsheetToolbar } from './SpreadsheetToolbar'
 import { Evaluator, cellRef } from './formula'
 import {
@@ -47,10 +59,11 @@ import {
   rowCount,
   serializeBook,
   DELIVERED_SHEET,
+  VEHICLE_COLUMNS,
+  findColumn,
   frozen,
   lastFilledRow,
   markArrived,
-  moveRowToSheet,
   seedBook,
   setFrozen,
   sheetAt,
@@ -200,6 +213,8 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
   const [finding, setFinding] = useState(false)
   const [adding, setAdding] = useState(false)
   const [charting, setCharting] = useState(false)
+  // Строка, груз из которой перегружают на другую машину. null — окно закрыто.
+  const [transferring, setTransferring] = useState<number | null>(null)
   // Что заполнила отметка о приёмке: показывается на пару секунд, чтобы было
   // видно, что нажатие сработало и куда именно оно записало.
   const [arrival, setArrival] = useState('')
@@ -429,6 +444,72 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
 
   const rect = bounds(selection)
 
+  /**
+   * Отметка «Прибыл»: сперва точки по пути по одной, потом прибытие.
+   * Её вызывают и кнопка на панели, и кнопка в полосе маршрута.
+   */
+  const markArrival = () => {
+    if (!editable) return
+    const row = rect.top
+
+    // Плечо, закрытое перегрузом, уже не приезжает: груз на другой машине.
+    if (isTransferred(sheet, row)) {
+      setArrival('Груз из этой строки перегружен — отмечайте прибытие на строке новой машины.')
+      window.setTimeout(() => setArrival(''), 7000)
+      return
+    }
+
+    /**
+     * Сначала — точки по пути.
+     *
+     * Рейс с промежуточными точками закрывается не разом: сперва
+     * отмечают, что машина прошла Кара-Тай, и только потом — что она
+     * доехала. Пока непройденные точки есть, кнопка отмечает ближайшую.
+     */
+    const step = passCheckpoint(doc, sheet, row, user.name, legs)
+    if (step.kind === 'checkpoint') {
+      setArrival(
+        `Прошли ${step.place}. Дальше: ${step.left.join(' → ')}`
+        + (step.arrival ? `, прибытие ${step.arrival}` : ''),
+      )
+      window.setTimeout(() => setArrival(''), 7000)
+      return
+    }
+
+    const filled = markArrived(doc, sheet, row, user.name)
+    if (filled.length === 0) {
+      setArrival('Отмечать нечего: нет колонки «Статус». Назовите так колонку в первой строке.')
+      window.setTimeout(() => setArrival(''), 6000)
+      return
+    }
+
+    // Прибывший рейс уезжает на свой лист: в рабочем журнале остаётся
+    // только то, что ещё в пути. Так же это разносят по вкладкам в
+    // обычных таблицах, только вручную.
+    //
+    // Груз, который ехал с перегрузом, уезжает всей цепочкой: плечи
+    // прежних машин тоже доставлены — тем самым грузом.
+    const moved = sheets[index]?.name === DELIVERED_SHEET
+      ? { landed: -1, legs: 0 }
+      : moveCargoChain(doc, sheet, row, DELIVERED_SHEET)
+    const { landed } = moved
+
+    setArrival(
+      landed >= 0
+        ? `Принято (${filled.join(', ')}) и перенесено на лист «${DELIVERED_SHEET}», строка ${landed + 1}`
+          + (moved.legs > 0 ? `, вместе с плечами до перегруза: ${moved.legs}` : '')
+        : `Строка ${row + 1}: отмечено прибытие (${filled.join(', ')})`,
+    )
+    window.setTimeout(() => setArrival(''), 6000)
+  }
+
+  // Ход рейса в строке под курсором: какие точки пройдены и что дальше.
+  const progress = selection.anchor.row === selection.focus.row
+    ? routeProgress(sheet, rect.top, legs)
+    : null
+  const nextStop = progress?.stops.find((stop) => stop.state === 'next') ?? null
+  const progressVehicleCol = findColumn(sheet, VEHICLE_COLUMNS)
+
   return (
     <div
       className="relative flex h-full min-h-0 flex-col"
@@ -522,48 +603,18 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
           )
           window.setTimeout(() => setArrival(''), 6000)
         }}
-        onArrived={() => {
+        onTransfer={() => {
           if (!editable) return
-          const row = rect.top
-
-          /**
-           * Сначала — точки по пути.
-           *
-           * Рейс с промежуточными точками закрывается не разом: сперва
-           * отмечают, что машина прошла Кара-Тай, и только потом — что она
-           * доехала. Пока непройденные точки есть, кнопка отмечает ближайшую.
-           */
-          const step = passCheckpoint(doc, sheet, row, user.name, legs)
-          if (step.kind === 'checkpoint') {
-            setArrival(
-              `Прошли ${step.place}. Дальше: ${step.left.join(' → ')}`
-              + (step.arrival ? `, прибытие ${step.arrival}` : ''),
-            )
+          const blocker = transferBlocker(sheet, rect.top)
+          if (blocker) {
+            setArrival(blocker)
             window.setTimeout(() => setArrival(''), 7000)
             return
           }
-
-          const filled = markArrived(doc, sheet, row, user.name)
-          if (filled.length === 0) {
-            setArrival('Отмечать нечего: нет колонки «Статус». Назовите так колонку в первой строке.')
-            window.setTimeout(() => setArrival(''), 6000)
-            return
-          }
-
-          // Прибывший рейс уезжает на свой лист: в рабочем журнале остаётся
-          // только то, что ещё в пути. Так же это разносят по вкладкам в
-          // обычных таблицах, только вручную.
-          const landed = sheets[index]?.name === DELIVERED_SHEET
-            ? -1
-            : moveRowToSheet(doc, sheet, row, DELIVERED_SHEET)
-
-          setArrival(
-            landed >= 0
-              ? `Принято (${filled.join(', ')}) и перенесено на лист «${DELIVERED_SHEET}», строка ${landed + 1}`
-              : `Строка ${row + 1}: отмечено прибытие (${filled.join(', ')})`,
-          )
-          window.setTimeout(() => setArrival(''), 6000)
+          setTransferring(rect.top)
         }}
+        onArrived={markArrival}
+        arrivedLabel={nextStop ? (nextStop.final ? 'Прибыл' : `Прошёл ${nextStop.place}`) : 'Прибыл'}
       />
 
       {importing && (
@@ -634,6 +685,40 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
         />
       )}
 
+      {transferring !== null && (() => {
+        const vehicleCol = findColumn(sheet, VEHICLE_COLUMNS)
+        const toCol = findColumn(sheet, ROUTE_COLUMNS.to)
+        return (
+          <TransferDialog
+            vehicle={vehicleCol === null ? '' : (readRaw(sheet, transferring, vehicleCol) ?? '')}
+            destination={toCol === null ? '' : (readRaw(sheet, transferring, toCol) ?? '')}
+            places={transferPlaces(sheet, transferring)}
+            hasDriver={findColumn(sheet, DRIVER_COLUMNS) !== null}
+            onClose={() => setTransferring(null)}
+            onSubmit={(value) => {
+              const result = transferCargo(doc, sheet, transferring, {
+                ...value,
+                who: user.name,
+                legs,
+                deliveredSheet: DELIVERED_SHEET,
+              })
+              if (result.kind === 'error') return result.message
+
+              setTransferring(null)
+              setSelection(cellAt(result.row, 0))
+              setArrival(
+                `Груз ${result.cargoId} перегружен на ${value.vehicle.trim()} в ${value.place.trim()}.`
+                + ` Новая строка ${result.row + 1}`
+                + (result.arrival ? `, прибытие ${result.arrival}` : '')
+                + (result.created ? '. Номер груза заведён в колонке «Груз №».' : '.'),
+              )
+              window.setTimeout(() => setArrival(''), 9000)
+              return null
+            }}
+          />
+        )
+      })()}
+
       {adding && (
         <AddRowDialog
           doc={doc}
@@ -665,6 +750,16 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
           }}
           onMatchesChange={setMatches}
           onClose={() => setFinding(false)}
+        />
+      )}
+
+      {progress && (
+        <RouteProgress
+          progress={progress}
+          vehicle={progressVehicleCol === null ? '' : (readRaw(sheet, rect.top, progressVehicleCol) ?? '')}
+          editable={editable}
+          now={new Date()}
+          onMark={markArrival}
         />
       )}
 

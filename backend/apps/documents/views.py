@@ -343,7 +343,12 @@ def _cargo_rows(document: Document) -> list[dict]:
         profit_col = find_column("прибыл", "profit")
         loss_col = find_column("ущерб", "убыт")
         from_col = find_column("откуда", "from")
-        to_col = find_column("куда", "destination", "to")
+        # «Откуда» содержит «куда» — без исключения маршрут читался «Алай → Алай».
+        to_col = next(
+            (col for col, label in labels.items()
+             if "откуда" not in label and any(word in label for word in ("куда", "destination", "to"))),
+            None,
+        )
         sheet_name = str(sheet.get("name") or "Лист")
         sheet_label = sheet_name.casefold()
 
@@ -357,8 +362,10 @@ def _cargo_rows(document: Document) -> list[dict]:
             delivered = any(word in sheet_label for word in ("достав", "прибыл", "delivered", "arrived")) or any(
                 word in status for word in ("достав", "прибыл", "готово", "delivered", "arrived")
             )
+            # «Перегружен» — груз едет дальше на другой машине, то есть он в пути.
+            transshipped = "перегружен" in status
             in_transit = any(word in sheet_label for word in ("в пути", "рейс", "груз", "transit")) or any(
-                word in status for word in ("в пути", "отправ", "транзит", "in transit")
+                word in status for word in ("в пути", "отправ", "транзит", "in transit", "перегружен")
             )
             amounts = {
                 "tax": money(tax_col, values),
@@ -386,6 +393,9 @@ def _cargo_rows(document: Document) -> list[dict]:
                     values.get(to_col, "") if to_col is not None else "",
                 ) if part),
                 **{key: str(value) for key, value in amounts.items()},
+                # Плечо до перегруза: его расход считается, а сам груз — нет,
+                # он посчитан строкой последней машины.
+                "transshipped": transshipped,
             })
     return result
 
@@ -409,7 +419,8 @@ class AccountantSummaryView(APIView):
         }
         for row in rows:
             group = totals[row["status"]]
-            group["count"] += 1
+            if not row["transshipped"]:
+                group["count"] += 1
             for key in keys:
                 group[key] += Decimal(row[key])
         return Response({

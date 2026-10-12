@@ -16,7 +16,8 @@
  *
  * Ручная заливка сильнее любой подсказки: её выбрал человек.
  */
-export type ToneKind = 'overdue' | 'soon' | 'tax' | 'progress' | 'waiting' | 'done' | 'cancelled'
+export type ToneKind =
+  | 'overdue' | 'soon' | 'tax' | 'progress' | 'waiting' | 'done' | 'cancelled' | 'transferred'
 
 export type StatusTone = {
   kind: ToneKind
@@ -84,6 +85,19 @@ const DONE: StatusTone = {
   darkColor: '#bbf7d0',
 }
 
+/**
+ * Груз переложен на другую машину. Плечо этой машины закрыто, но сам груз
+ * ещё не доставлен — поэтому не «Готово» и не «Прибыл».
+ */
+export const TRANSFERRED: StatusTone = {
+  kind: 'transferred',
+  label: 'Перегружен',
+  background: '#ede9fe',
+  color: '#5b21b6',
+  darkBackground: '#4c1d95',
+  darkColor: '#ddd6fe',
+}
+
 const CANCELLED: StatusTone = {
   kind: 'cancelled',
   label: 'Отменён',
@@ -101,6 +115,12 @@ const CANCELLED: StatusTone = {
  * раньше «оплачено», иначе долг покрасится зелёным.
  */
 const RULES: { starts: string[]; tone: StatusTone }[] = [
+  {
+    tone: TRANSFERRED,
+    // Только готовое слово «перегружен»: «Перегрузка» встречается как тип
+    // рейса, и такая строка закрытой не становится.
+    starts: ['перегружен', 'transshipped', 'reloaded', '已换车', '已转运'],
+  },
   {
     tone: OVERDUE,
     starts: [
@@ -158,7 +178,7 @@ const RULES: { starts: string[]; tone: StatusTone }[] = [
 ]
 
 /** Все статусы для списка вставки и для легенды. */
-export const STATUS_TONES: StatusTone[] = [OVERDUE, TAX, PROGRESS, WAITING, DONE, CANCELLED]
+export const STATUS_TONES: StatusTone[] = [OVERDUE, TAX, PROGRESS, WAITING, TRANSFERRED, DONE, CANCELLED]
 
 /**
  * Приводит написанное к сравнимому виду: регистр, «ё», кыргызские буквы.
@@ -339,10 +359,14 @@ export function deadlineTone(deadline: Date, now: Date, settled: boolean): Statu
   return null
 }
 
-/** Строка закрыта: где-то в ней стоит «Готово», «Прибыл» или «Отменён». */
+/**
+ * Строка закрыта: где-то в ней стоит «Готово», «Прибыл», «Отменён» или
+ * «Перегружен». У перегруженной машины срок больше не горит: груз едет
+ * дальше на другой, и опаздывает уже она.
+ */
 export function isSettled(values: (string | null)[]): boolean {
   return values.some((value) => {
-    const tone = statusTone(value)
-    return tone?.kind === 'done' || tone?.kind === 'cancelled'
+    const kind = statusTone(value)?.kind
+    return kind === 'done' || kind === 'cancelled' || kind === 'transferred'
   })
 }

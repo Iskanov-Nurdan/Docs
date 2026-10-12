@@ -33,7 +33,7 @@ const emptyTotals = (): Totals => ({ count: 0, tax: 0, transit: 0, income: 0, ex
 function sum(rows: AccountantRow[]): Totals {
   const result = emptyTotals()
   for (const row of rows) {
-    result.count += 1
+    if (!row.transshipped) result.count += 1
     for (const { key } of FIELDS) result[key] += Number(row[key]) || 0
   }
   return result
