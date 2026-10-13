@@ -12,7 +12,10 @@
  *
  * Деньги не переносятся: стоимость груза и налог остаются в первой строке,
  * а расход на перевозку у каждой машины свой. Иначе сводка бухгалтера
- * посчитала бы один груз дважды.
+ * посчитала бы один груз дважды. Поэтому во вторую строку уходит только
+ * текст — груз, клиент, примечания, — а числа и формулы нет: колонку с
+ * деньгами по названию узнать можно не всегда («Общая стоимость», «Пошлина»),
+ * а число в чужой колонке задвоило бы и итог под таблицей.
  */
 import type * as Y from 'yjs'
 import type { RouteLeg } from '@/types'
@@ -27,11 +30,10 @@ import {
   lastFilledRow,
   moveRowToSheet,
   readRaw,
-  shiftFormulaToRow,
   writeCell,
   type SheetMap,
 } from './model'
-import { isMoneyColumn } from './money'
+import { isMoneyColumn, parseAmount } from './money'
 import {
   ROUTE_COLUMNS, formatMoment, formatVia, parseCheckpoints, parseVia, routeHours,
 } from './routing'
@@ -41,29 +43,49 @@ import { TRANSFERRED, statusTone } from './statuses'
 export const CARGO_ID_COLUMNS = ['груз №', '№ груза', 'номер груза', 'накладн', 'cargo no', 'cargo id', '货号', '运单']
 const CARGO_ID_HEADER = 'Груз №'
 
-export const DRIVER_COLUMNS =['водител', 'шофер', 'шофёр', 'айдоочу', 'driver', '司机']
+export const DRIVER_COLUMNS = ['водител', 'шофер', 'шофёр', 'айдоочу', 'driver', '司机']
+/** Телефон водителя — у новой машины свой, его спрашивает окно перегруза. */
+export const DRIVER_PHONE_COLUMNS = ['телефон водител', 'тел водител', 'тел. водител', 'телефон',
+                                     'тел.', 'тел ', 'phone', '电话']
+/**
+ * Колонки, которые относятся к машине, а не к грузу: вторая машина и её
+ * телефон. Новой машине они не переходят.
+ */
+const VEHICLE_OWN_COLUMNS = ['втор', 'телефон', 'тел.', 'тел ', 'phone', '电话']
 const NOTE_COLUMNS = ['примечан', 'комментар', 'эскертүү', 'note', 'comment', '备注']
 
 const two = (value: number) => String(value).padStart(2, '0')
 const sameplace = (a: string, b: string) =>
   a.trim().toLowerCase().replace(/ё/g, 'е') === b.trim().toLowerCase().replace(/ё/g, 'е')
 
-/** Номер груза: «Г-0042». */
-const CARGO_ID = /^Г-(\d+)$/
+/** Номер груза: «Г-0042-7K». Хвост после второго дефиса — метка компьютера. */
+const CARGO_ID = /^Г-(\d+)(?:-[0-9A-Z]+)?$/
 
-/** Следующий свободный номер груза по всей книге, включая «Груз доставлен». */
+/**
+ * Следующий номер груза.
+ *
+ * Номер считается по своей копии книги, а двое могут перегружать в одну и ту
+ * же секунду — и оба насчитали бы «Г-0042». Тогда при приёмке одного груза в
+ * «Груз доставлен» уехало бы плечо чужого. Поэтому к номеру добавляется метка
+ * компьютера (из идентификатора участника Yjs): у двоих она разная.
+ *
+ * Просматриваются все листы и все колонки: на листе «Груз доставлен» колонка
+ * могла называться иначе, а номер, выданный раньше, выдавать снова нельзя.
+ */
 function nextCargoId(doc: Y.Doc): string {
   let highest = 0
   for (const sheet of book(doc).toArray()) {
-    const col = findColumn(sheet, CARGO_ID_COLUMNS)
-    if (col === null) continue
     const last = lastFilledRow(sheet)
+    const total = colCount(sheet)
     for (let row = 1; row <= last; row += 1) {
-      const match = CARGO_ID.exec((readRaw(sheet, row, col) ?? '').trim())
-      if (match) highest = Math.max(highest, Number(match[1]))
+      for (let col = 0; col < total; col += 1) {
+        const match = CARGO_ID.exec((readRaw(sheet, row, col) ?? '').trim())
+        if (match) highest = Math.max(highest, Number(match[1]))
+      }
     }
   }
-  return `Г-${String(highest + 1).padStart(4, '0')}`
+  const mark = (doc.clientID % 1296).toString(36).toUpperCase().padStart(2, '0')
+  return `Г-${String(highest + 1).padStart(4, '0')}-${mark}`
 }
 
 /**
@@ -76,17 +98,24 @@ function cargoIdColumn(doc: Y.Doc, sheet: SheetMap, deliveredSheet: string): num
   const existing = findColumn(sheet, CARGO_ID_COLUMNS)
   if (existing !== null) return existing
 
-  let last = -1
-  const total = colCount(sheet)
-  for (let col = 0; col < total; col += 1) {
-    if ((readRaw(sheet, 0, col) ?? '').trim()) last = col
+  // Строки переезжают на «Груз доставлен» по номеру столбца, поэтому место
+  // должно быть свободно на обоих листах: иначе номер груза лёг бы там в
+  // чужую колонку («Оплачено бухгалтером»).
+  const delivered = book(doc).toArray().find((item) => String(item.get('name')) === deliveredSheet)
+  const lastHeader = (target: SheetMap) => {
+    let last = -1
+    const total = colCount(target)
+    for (let col = 0; col < total; col += 1) {
+      if ((readRaw(target, 0, col) ?? '').trim()) last = col
+    }
+    return last
   }
-  const col = last + 1
+  const col = Math.max(lastHeader(sheet), delivered && delivered !== sheet ? lastHeader(delivered) : -1) + 1
   if (col >= colCount(sheet)) growCols(doc, sheet, col + 1 - colCount(sheet))
   writeCell(doc, sheet, 0, col, CARGO_ID_HEADER)
 
-  const delivered = book(doc).toArray().find((item) => String(item.get('name')) === deliveredSheet)
-  if (delivered && delivered !== sheet && !(readRaw(delivered, 0, col) ?? '').trim()) {
+  if (delivered && delivered !== sheet) {
+    if (col >= colCount(delivered)) growCols(doc, delivered, col + 1 - colCount(delivered))
     writeCell(doc, delivered, 0, col, CARGO_ID_HEADER)
   }
   return col
@@ -99,6 +128,8 @@ export type TransferInput = {
   vehicle: string
   /** Водитель новой машины. Пусто — колонка останется пустой. */
   driver: string
+  /** Телефон водителя новой машины. Пусто — колонка останется пустой. */
+  phone: string
   /** Кто отметил перегруз — пишется в «Принял». */
   who: string
   legs: RouteLeg[]
@@ -121,10 +152,41 @@ export function transferBlocker(sheet: SheetMap, row: number): string | null {
   if (from === null || to === null) return 'Для перегруза нужны колонки «Откуда» и «Куда».'
   if (!(readRaw(sheet, row, to) ?? '').trim()) return 'В строке не заполнено «Куда».'
 
+  // Без статуса перегруженную строку нечем закрыть: её можно было бы
+  // перегрузить второй раз, срок продолжал бы краснеть, а цепочка при
+  // приёмке не собралась бы.
   const status = findColumn(sheet, ARRIVAL_COLUMNS.status)
-  const kind = status === null ? undefined : statusTone(readRaw(sheet, row, status))?.kind
+  if (status === null) return 'Для перегруза нужна колонка «Статус» — по ней строка закрывается.'
+  const kind = statusTone(readRaw(sheet, row, status))?.kind
   if (kind === 'transferred') return 'Груз из этой строки уже перегружен — отмечайте строку новой машины.'
   if (kind === 'done' || kind === 'cancelled') return 'Рейс в этой строке уже закрыт.'
+
+  const other = activeLegOfSameCargo(sheet, row)
+  if (other !== null) {
+    return `У этого груза уже есть машина в пути — строка ${other + 1}. Перегружайте с неё.`
+  }
+  return null
+}
+
+/**
+ * Другая незакрытая строка того же груза. null — такой нет.
+ *
+ * Груз едет на одной машине. Если строк «в пути» с его номером две, значит,
+ * перегруз уже сделали — возможно, с другого компьютера одновременно с этим.
+ */
+export function activeLegOfSameCargo(sheet: SheetMap, row: number): number | null {
+  const idCol = findColumn(sheet, CARGO_ID_COLUMNS)
+  const status = findColumn(sheet, ARRIVAL_COLUMNS.status)
+  if (idCol === null || status === null) return null
+  const cargoId = (readRaw(sheet, row, idCol) ?? '').trim()
+  if (!cargoId) return null
+
+  const last = lastFilledRow(sheet)
+  for (let index = 1; index <= last; index += 1) {
+    if (index === row || (readRaw(sheet, index, idCol) ?? '').trim() !== cargoId) continue
+    const kind = statusTone(readRaw(sheet, index, status))?.kind
+    if (kind !== 'transferred' && kind !== 'done' && kind !== 'cancelled') return index
+  }
   return null
 }
 
@@ -169,6 +231,7 @@ export function transferCargo(doc: Y.Doc, sheet: SheetMap, row: number,
     arrival: findColumn(sheet, ROUTE_COLUMNS.arrival),
     passed: findColumn(sheet, ROUTE_COLUMNS.passed),
     driver: findColumn(sheet, DRIVER_COLUMNS),
+    phone: findColumn(sheet, DRIVER_PHONE_COLUMNS),
     note: findColumn(sheet, NOTE_COLUMNS),
     status: findColumn(sheet, ARRIVAL_COLUMNS.status),
     acceptedBy: findColumn(sheet, ARRIVAL_COLUMNS.acceptedBy),
@@ -193,12 +256,17 @@ export function transferCargo(doc: Y.Doc, sheet: SheetMap, row: number,
   const viaBefore = at === -1 ? via : via.slice(0, at)
   const viaAfter = at === -1 ? [] : via.slice(at + 1)
 
-  // Эти колонки у новой машины свои; остальное (груз, вес, клиент) — то же.
+  // Эти колонки у новой машины свои; остальное (груз, клиент) — то же.
   const own = new Set(
     [col.vehicle, col.from, col.to, col.via, col.date, col.departure, col.arrival,
-     col.passed, col.driver, col.note, col.status, col.acceptedBy, col.acceptedAt]
+     col.passed, col.driver, col.phone, col.note, col.status, col.acceptedBy, col.acceptedAt]
       .filter((value): value is number => value !== null),
   )
+  const headers = colCount(sheet)
+  for (let index = 0; index < headers; index += 1) {
+    const header = (readRaw(sheet, 0, index) ?? '').trim().toLowerCase()
+    if (VEHICLE_OWN_COLUMNS.some((prefix) => header.startsWith(prefix))) own.add(index)
+  }
 
   const now = new Date()
   const today = `${two(now.getDate())}.${two(now.getMonth() + 1)}.${now.getFullYear()}`
@@ -222,18 +290,15 @@ export function transferCargo(doc: Y.Doc, sheet: SheetMap, row: number,
 
     insertRow(doc, sheet, target)
 
-    // Груз, вес, клиент — переезжают. Деньги — нет: стоимость и налог
-    // остаются у первой машины, расход у второй будет свой. Формула строки
-    // переносится как при протягивании вниз.
+    // Переезжает только текст: груз, клиент. Числа и формулы остаются у
+    // первой машины — деньги и вес принадлежат грузу один раз, иначе они
+    // задвоились бы и в итоге под таблицей, и в сводке бухгалтера.
     const total = colCount(sheet)
     for (let index = 0; index < total; index += 1) {
       const raw = readRaw(sheet, row, index)
-      if (raw === null || raw === '') continue
-      if (raw.startsWith('=')) {
-        writeCell(doc, sheet, target, index, shiftFormulaToRow(raw, row, target))
-        continue
-      }
+      if (raw === null || raw.trim() === '') continue
       if (own.has(index) || isMoneyColumn(sheet, index)) continue
+      if (raw.startsWith('=') || parseAmount(raw) !== null) continue
       writeCell(doc, sheet, target, index, raw)
     }
 
@@ -242,6 +307,9 @@ export function transferCargo(doc: Y.Doc, sheet: SheetMap, row: number,
     writeCell(doc, sheet, target, col.vehicle, vehicle)
     if (col.driver !== null && input.driver.trim()) {
       writeCell(doc, sheet, target, col.driver, input.driver.trim())
+    }
+    if (col.phone !== null && input.phone.trim()) {
+      writeCell(doc, sheet, target, col.phone, input.phone.trim())
     }
     writeCell(doc, sheet, target, col.from, place)
     writeCell(doc, sheet, target, col.to, to)
@@ -304,7 +372,9 @@ export function moveCargoChain(doc: Y.Doc, sheet: SheetMap, row: number,
     for (let index = 1; index <= last; index += 1) {
       if (index === row) continue
       if ((readRaw(sheet, index, idCol) ?? '').trim() !== cargoId) continue
-      if (isTransferred(sheet, index)) chain.push(index)
+      // Только плечи ДО этой машины: перегруженные строки выше неё. Строка
+      // с тем же номером ниже — чужая или ошибочная, её не трогаем.
+      if (index < row && isTransferred(sheet, index)) chain.push(index)
     }
   }
   chain.sort((a, b) => a - b)

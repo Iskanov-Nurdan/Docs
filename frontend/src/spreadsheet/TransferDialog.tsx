@@ -17,14 +17,19 @@ type Props = {
   places: string[]
   /** Есть ли в таблице колонка водителя — иначе поле не спрашиваем. */
   hasDriver: boolean
-  onSubmit: (value: { place: string; vehicle: string; driver: string }) => string | null
+  /** Есть ли колонка телефона водителя: у новой машины он свой. */
+  hasPhone: boolean
+  onSubmit: (value: { place: string; vehicle: string; driver: string; phone: string }) => string | null
   onClose: () => void
 }
 
-export function TransferDialog({ vehicle, destination, places, hasDriver, onSubmit, onClose }: Props) {
+export function TransferDialog({
+  vehicle, destination, places, hasDriver, hasPhone, onSubmit, onClose,
+}: Props) {
   const [place, setPlace] = useState(places[0] ?? '')
   const [nextVehicle, setNextVehicle] = useState('')
   const [driver, setDriver] = useState('')
+  const [phone, setPhone] = useState('')
   const [error, setError] = useState('')
 
   // Подсказки места: сначала точки этого рейса, потом весь справочник.
@@ -42,7 +47,7 @@ export function TransferDialog({ vehicle, destination, places, hasDriver, onSubm
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    const problem = onSubmit({ place, vehicle: nextVehicle, driver })
+    const problem = onSubmit({ place, vehicle: nextVehicle, driver, phone })
     if (problem) setError(problem)
   }
 
@@ -92,6 +97,20 @@ export function TransferDialog({ vehicle, destination, places, hasDriver, onSubm
             <input
               value={driver}
               onChange={(event) => setDriver(event.target.value)}
+              className={fieldClass}
+            />
+          </label>
+        )}
+
+        {hasPhone && (
+          <label className="mb-4 block">
+            <span className="mb-1 block text-sm text-ink-muted">Телефон водителя</span>
+            <input
+              value={phone}
+              type="tel"
+              inputMode="tel"
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="+996 (555) 123 456"
               className={fieldClass}
             />
           </label>

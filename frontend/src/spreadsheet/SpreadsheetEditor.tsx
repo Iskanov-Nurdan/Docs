@@ -17,6 +17,7 @@ import { SheetFind } from './SheetFind'
 import { TransferDialog } from './TransferDialog'
 import {
   DRIVER_COLUMNS,
+  DRIVER_PHONE_COLUMNS,
   isTransferred,
   moveCargoChain,
   transferBlocker,
@@ -58,6 +59,7 @@ import {
   renameSheet,
   rowCount,
   serializeBook,
+  ARRIVAL_COLUMNS,
   DELIVERED_SHEET,
   VEHICLE_COLUMNS,
   findColumn,
@@ -74,6 +76,7 @@ import { bounds, cellAt, cells as cellsOfSelection, label, type Cell, type Selec
 import { useRoutes } from '@/store/routes'
 import { useRates } from '@/store/rates'
 import { isMoneyColumn, writeMoney } from './money'
+import { statusTone } from './statuses'
 
 /** Число в сообщении: «128 400», «87,45». */
 const money = (value: number) =>
@@ -459,6 +462,17 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
       return
     }
 
+    // Закрытый рейс не «приезжает» второй раз: отменённый стал бы «Прибыл»
+    // и уехал в «Груз доставлен», а доставленный получил бы отметки задним
+    // числом.
+    const statusCol = findColumn(sheet, ARRIVAL_COLUMNS.status)
+    const closedAs = statusCol === null ? null : statusTone(readRaw(sheet, row, statusCol))
+    if (closedAs && (closedAs.kind === 'done' || closedAs.kind === 'cancelled')) {
+      setArrival(`Рейс в этой строке уже закрыт («${readRaw(sheet, row, statusCol as number)}») — отмечать нечего.`)
+      window.setTimeout(() => setArrival(''), 7000)
+      return
+    }
+
     /**
      * Сначала — точки по пути.
      *
@@ -694,6 +708,7 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
             destination={toCol === null ? '' : (readRaw(sheet, transferring, toCol) ?? '')}
             places={transferPlaces(sheet, transferring)}
             hasDriver={findColumn(sheet, DRIVER_COLUMNS) !== null}
+            hasPhone={findColumn(sheet, DRIVER_PHONE_COLUMNS) !== null}
             onClose={() => setTransferring(null)}
             onSubmit={(value) => {
               const result = transferCargo(doc, sheet, transferring, {

@@ -120,8 +120,52 @@ function createWindow() {
 
   const contents = mainWindow.webContents
 
-  // Ссылки «открыть в новой вкладке»: свои — новым окном приложения
-  // (публичная страница, выгрузка), чужие — в браузере.
+  // Сервер недоступен или нет интернета — своя страница с «Повторить»,
+  // а не серая ошибка Chromium. -3 — переход отменён, это не сбой.
+  contents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
+    if (!isMainFrame || code === -3 || !isOwnUrl(url)) return
+    showOffline(mainWindow)
+  })
+
+  // Сервер ответил, но ошибкой (502 при перезапуске после выкладки) —
+  // did-fail-load на это не срабатывает, и на экране осталась бы страница
+  // nginx «502 Bad Gateway».
+  contents.on('did-navigate', (_event, url, httpResponseCode) => {
+    if (isOwnUrl(url) && httpResponseCode >= 500) showOffline(mainWindow)
+  })
+
+  // Упавшая вкладка поднимается сама: правки при этом не теряются, они в
+  // IndexedDB. Но не сразу и не бесконечно: если страница падает снова и
+  // снова, мгновенные перезагрузки только греют процессор — после трёх
+  // падений за минуту показываем «Нет связи», а оттуда повтор раз в 15 секунд.
+  const crashes = []
+  contents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    while (crashes.length > 0 && now - crashes[0] > 60_000) crashes.shift()
+    crashes.push(now)
+    console.warn('Страница упала:', details.reason, `(${crashes.length} за минуту)`)
+    if (crashes.length >= 3) {
+      showOffline(mainWindow)
+      return
+    }
+    setTimeout(() => {
+      if (!contents.isDestroyed()) contents.reload()
+    }, 1000 * crashes.length)
+  })
+
+  void mainWindow.loadURL(APP_URL)
+}
+
+// ------------------------------- Все окна -------------------------------
+//
+// Ограничения на переходы ставятся на каждое окно приложения, а не только на
+// главное: окно, открытое со своего сайта (публичная страница, выгрузка),
+// иначе могло бы уйти на любой чужой адрес и открыть оттуда новые окна.
+
+app.on('web-contents-created', (_event, contents) => {
+  // Ссылки «открыть в новой вкладке»: свои — новым окном приложения,
+  // чужие — в браузере.
   contents.setWindowOpenHandler(({ url }) => {
     if (isOwnUrl(url)) {
       return {
@@ -137,28 +181,16 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  contents.on('will-navigate', (event, url) => {
+  const guard = (event, url) => {
     if (isOwnUrl(url)) return
     event.preventDefault()
     openOutside(url)
-  })
-
-  // Сервер недоступен или нет интернета — своя страница с «Повторить»,
-  // а не серая ошибка Chromium. -3 — переход отменён, это не сбой.
-  contents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
-    if (!isMainFrame || code === -3 || !isOwnUrl(url)) return
-    showOffline(mainWindow)
-  })
-
-  // Упавшая вкладка поднимается сама: правки при этом не теряются, они в IndexedDB.
-  contents.on('render-process-gone', (_event, details) => {
-    if (details.reason === 'clean-exit') return
-    console.warn('Страница упала, перезагружаем:', details.reason)
-    contents.reload()
-  })
-
-  void mainWindow.loadURL(APP_URL)
-}
+  }
+  contents.on('will-navigate', guard)
+  // Перенаправление сервером на чужой адрес — тот же переход, только
+  // начатый не страницей.
+  contents.on('will-redirect', guard)
+})
 
 // -------------------------------- Меню --------------------------------
 //

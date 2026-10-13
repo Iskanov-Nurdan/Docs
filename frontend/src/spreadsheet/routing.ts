@@ -11,7 +11,7 @@
 import type * as Y from 'yjs'
 import { hoursBetween } from '@/store/routes'
 import type { RouteLeg } from '@/types'
-import { ARRIVAL_COLUMNS, findColumn, readRaw, writeCell, type SheetMap } from './model'
+import { ARRIVAL_COLUMNS, findColumn, isRowClosed, readRaw, writeCell, type SheetMap } from './model'
 import { parseDeadline, statusTone } from './statuses'
 
 /** Заголовки колонок, по которым собирается расчёт. */
@@ -261,8 +261,15 @@ export function routePoints(sheet: SheetMap, row: number): string[] {
   const viaCol = findColumn(sheet, ROUTE_COLUMNS.via)
   const via = viaCol === null ? [] : parseVia(readRaw(sheet, row, viaCol) ?? '')
   const to = toCol === null ? '' : (readRaw(sheet, row, toCol) ?? '').trim()
-  return [...via, to].filter(Boolean)
+  // Конечную точку, вписанную ещё и в «Через», промежуточной не считаем:
+  // иначе кнопка обещала бы «Прошёл Ош», а на деле закрывала рейс.
+  const stops = via.filter((point) => placeFold(point) !== placeFold(to))
+  return [...stops, to].filter(Boolean)
 }
+
+/** Название точки для сравнения: регистр, «ё» и лишние пробелы не важны. */
+export const placeFold = (name: string) =>
+  name.trim().toLowerCase().replace(/ё/g, 'е').split(/\s+/).join(' ')
 
 // ------------------------------ Ход рейса ------------------------------
 
@@ -288,10 +295,13 @@ export type RouteProgress = {
 
 /** «12.10 15:20» из отметки о прохождении — год берём текущий. */
 function stampMoment(note: string, now: Date): Date | null {
-  const match = /(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})/.exec(note)
+  // «12.10 15:20» — как пишет отметка; «12.10.2026 15:20» — если вписали руками.
+  const match = /(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s+(\d{1,2}):(\d{2})/.exec(note)
   if (!match) return null
-  const moment = new Date(now.getFullYear(), Number(match[2]) - 1, Number(match[1]),
-                          Number(match[3]), Number(match[4]))
+  const year = match[3] ? Number(match[3]) : now.getFullYear()
+  const moment = new Date(year, Number(match[2]) - 1, Number(match[1]),
+                          Number(match[4]), Number(match[5]))
+  if (match[3]) return moment
   // Отметка из конца декабря, разглядываемая в январе, — прошлогодняя.
   if (moment.getTime() - now.getTime() > 180 * 24 * 3600 * 1000) {
     moment.setFullYear(moment.getFullYear() - 1)
@@ -327,7 +337,7 @@ export function routeProgress(sheet: SheetMap, row: number, legs: RouteLeg[],
   const passedCol = findColumn(sheet, ROUTE_COLUMNS.passed)
   const passed = passedCol === null ? [] : parseCheckpoints(readRaw(sheet, row, passedCol) ?? '')
   const passedAt = (place: string) =>
-    passed.find((item) => item.place.toLowerCase() === place.toLowerCase())
+    passed.find((item) => placeFold(item.place) === placeFold(place))
 
   // Отсчёт времени — от последней пройденной точки, а если таких нет, от выезда.
   let anchorPlace = origin
@@ -400,7 +410,8 @@ export type CheckpointResult =
  */
 export function passCheckpoint(doc: Y.Doc, sheet: SheetMap, row: number,
                                who: string, legs: RouteLeg[]): CheckpointResult {
-  if (row <= 0) return { kind: 'none' }
+  // Закрытый рейс точки не проходит — см. isRowClosed.
+  if (row <= 0 || isRowClosed(sheet, row)) return { kind: 'none' }
 
   const points = routePoints(sheet, row)
   if (points.length === 0) return { kind: 'none' }
@@ -409,9 +420,9 @@ export function passCheckpoint(doc: Y.Doc, sheet: SheetMap, row: number,
   const passed = passedCol === null
     ? []
     : parseCheckpoints(readRaw(sheet, row, passedCol) ?? '')
-  const seen = new Set(passed.map((item) => item.place.toLowerCase()))
+  const seen = new Set(passed.map((item) => placeFold(item.place)))
 
-  const next = points.find((place) => !seen.has(place.toLowerCase()))
+  const next = points.find((place) => !seen.has(placeFold(place)))
   if (!next) return { kind: 'none' }
 
   // Последняя точка — это прибытие, его отмечает приёмка.

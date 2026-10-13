@@ -293,6 +293,15 @@ def _amount(value) -> Decimal:
         return Decimal(0)
 
 
+# Те же слова, что у статуса «Перегружен» в таблице (frontend/src/spreadsheet/
+# statuses.ts): слово целиком, «ё» как «е». «Перегруженный прицеп» — не статус.
+_TRANSSHIPPED = re.compile(r"(?<!\w)(перегружен|transshipped|reloaded)(?!\w)|已换车|已转运")
+
+
+def _is_transshipped(status: str) -> bool:
+    return bool(_TRANSSHIPPED.search(status.casefold().replace("ё", "е")))
+
+
 def _cargo_rows(document: Document) -> list[dict]:
     content = document.content if isinstance(document.content, dict) else {}
     result = []
@@ -346,7 +355,8 @@ def _cargo_rows(document: Document) -> list[dict]:
         # «Откуда» содержит «куда» — без исключения маршрут читался «Алай → Алай».
         to_col = next(
             (col for col, label in labels.items()
-             if "откуда" not in label and any(word in label for word in ("куда", "destination", "to"))),
+             if "откуда" not in label
+             and (any(word in label for word in ("куда", "destination")) or re.search(r"\bto\b", label))),
             None,
         )
         sheet_name = str(sheet.get("name") or "Лист")
@@ -363,9 +373,9 @@ def _cargo_rows(document: Document) -> list[dict]:
                 word in status for word in ("достав", "прибыл", "готово", "delivered", "arrived")
             )
             # «Перегружен» — груз едет дальше на другой машине, то есть он в пути.
-            transshipped = "перегружен" in status
-            in_transit = any(word in sheet_label for word in ("в пути", "рейс", "груз", "transit")) or any(
-                word in status for word in ("в пути", "отправ", "транзит", "in transit", "перегружен")
+            transshipped = _is_transshipped(status)
+            in_transit = transshipped or any(word in sheet_label for word in ("в пути", "рейс", "груз", "transit")) or any(
+                word in status for word in ("в пути", "отправ", "транзит", "in transit")
             )
             amounts = {
                 "tax": money(tax_col, values),

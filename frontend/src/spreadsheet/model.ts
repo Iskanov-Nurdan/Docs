@@ -15,7 +15,7 @@ import {
 } from './formula'
 // Отбор по промежутку сравнивает и время: «до среды» — это тот же разбор
 // срока, что красит просрочку.
-import { parseDeadline } from './statuses'
+import { parseDeadline, statusTone } from './statuses'
 
 export const ROW_HEIGHT = 24
 export const DEFAULT_COL_WIDTH = 100
@@ -1082,7 +1082,7 @@ export const ARRIVAL_COLUMNS = {
  */
 export function markArrived(doc: Y.Doc, sheet: SheetMap, row: number,
                             who: string): string[] {
-  if (row <= 0) return []
+  if (row <= 0 || isRowClosed(sheet, row)) return []
 
   const now = new Date()
   const time = `${String(now.getDate()).padStart(2, '0')}.`
@@ -1110,6 +1110,20 @@ export function markArrived(doc: Y.Doc, sheet: SheetMap, row: number,
     }
   })
   return filled
+}
+
+/**
+ * Рейс в строке закрыт: «Прибыл», «Отменён» или «Перегружен».
+ *
+ * Закрытый рейс не «приезжает» второй раз: отменённый иначе стал бы
+ * «Прибыл» и уехал в «Груз доставлен», а доставленный получил бы отметки
+ * о прохождении точек задним числом.
+ */
+export function isRowClosed(sheet: SheetMap, row: number): boolean {
+  const status = findColumn(sheet, ARRIVAL_COLUMNS.status)
+  if (status === null) return false
+  const kind = statusTone(readRaw(sheet, row, status))?.kind
+  return kind === 'done' || kind === 'cancelled' || kind === 'transferred'
 }
 
 /** Список допустимых значений столбца: вместо набора руками — выбор. */

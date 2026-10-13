@@ -1,7 +1,7 @@
 {
   "name": "alitrade-desktop",
   "productName": "ALI trade",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ALI trade для Windows и macOS: журнал рейсов и таблицы в отдельном окне",
   "author": "ALI trade",
   "private": true,
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "dist": "electron-builder --win nsis",
+    "dist": "electron-builder --win nsis -c.electronDist=node_modules/electron/dist",
     "dist:mac": "electron-builder --mac dmg --universal"
   },
   "build": {

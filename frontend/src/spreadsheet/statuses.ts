@@ -114,12 +114,14 @@ const CANCELLED: StatusTone = {
  * Порядок важен: проверка идёт сверху вниз, и «не оплачено» должно сработать
  * раньше «оплачено», иначе долг покрасится зелёным.
  */
-const RULES: { starts: string[]; tone: StatusTone }[] = [
+const RULES: { starts: string[]; tone: StatusTone; whole?: boolean }[] = [
   {
     tone: TRANSFERRED,
-    // Только готовое слово «перегружен»: «Перегрузка» встречается как тип
-    // рейса, и такая строка закрытой не становится.
+    // Только слово «перегружен» целиком: «Перегрузка» — тип рейса, а
+    // «Перегруженный прицеп» — примечание, и строку они не закрывают.
+    // Пишут и через «ё» — fold сводит её к «е».
     starts: ['перегружен', 'transshipped', 'reloaded', '已换车', '已转运'],
+    whole: true,
   },
   {
     tone: OVERDUE,
@@ -212,7 +214,11 @@ function normalize(text: string): string {
 const FOLDED_RULES = RULES.map((rule) => ({
   tone: rule.tone,
   starts: rule.starts.map(fold),
+  whole: rule.whole ?? false,
 }))
+
+/** Слово кончается здесь: дальше конец строки или не буква. */
+const wordEndsAt = (text: string, at: number) => at >= text.length || !/\p{L}/u.test(text[at])
 
 /**
  * Уточнения к разбору по началу слова.
@@ -243,7 +249,9 @@ export function statusTone(text: string | null): StatusTone | null {
   if (!normalized || normalized.length > 40) return null
 
   for (const rule of FOLDED_RULES) {
-    if (!rule.starts.some((start) => normalized.startsWith(start))) continue
+    const hit = rule.starts.some((start) =>
+      normalized.startsWith(start) && (!rule.whole || wordEndsAt(normalized, start.length)))
+    if (!hit) continue
 
     const override = FOLDED_OVERRIDES.find((item) => normalized.includes(item.contains))
     return override ? override.tone : rule.tone

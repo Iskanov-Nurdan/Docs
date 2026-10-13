@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type * as Y from 'yjs'
 import { ColumnTools } from './ColumnTools'
+import { autoPick, filterChoices } from './choices'
 import { Evaluator, colLabel, isError } from './formula'
 import {
   DEFAULT_COL_WIDTH,
@@ -54,9 +55,6 @@ type Props = {
   /** Ячейки, найденные поиском по листу: подсвечиваются все сразу. */
   matches?: { row: number; col: number }[]
 }
-
-/** Текст варианта для сравнения с набранным: без регистра и «ё». */
-const foldChoice = (text: string) => text.trim().toLowerCase().replace(/ё/g, 'е')
 
 /** Пустой набор скрытых строк — общий, чтобы не плодить объекты. */
 const EMPTY_ROWS: Set<number> = new Set()
@@ -285,33 +283,17 @@ export function Grid({
   }, [editing, sheet, version, places, transitAmounts])
 
   /**
-   * Список выбора по набранному: «би» оставляет «Бишкек», «ош» — «Ош» и
-   * «Ошская обл.». Сначала то, что начинается с набранного, потом то, где оно
-   * внутри. Регистр и «ё» не важны.
+   * Список выбора по набранному и вариант, который запишет Enter. Правила —
+   * в choices.ts: там же их проверяют тесты.
    */
-  const shownChoices = useMemo(() => {
-    if (!choices || !editing) return null
-    const needle = foldChoice(editing.value)
-    if (!editing.typed || !needle) return choices
+  const shownChoices = useMemo(
+    () => (choices && editing ? filterChoices(choices, editing.value, editing.typed) : null),
+    [choices, editing],
+  )
 
-    const starts: string[] = []
-    const inside: string[] = []
-    for (const choice of choices) {
-      const folded = foldChoice(choice)
-      if (folded.startsWith(needle)) starts.push(choice)
-      else if (folded.includes(needle)) inside.push(choice)
-    }
-    return [...starts, ...inside]
-  }, [choices, editing])
-
-  // Подсвеченный вариант: Enter запишет его. Как только что-то набрали и
-  // нашлось совпадение, первое подсвечено сразу — набрал «би», нажал Enter,
-  // и в ячейке «Бишкек». Без набора не подсвечено ничего: Enter оставляет
-  // ячейку как была.
   const [picked, setPicked] = useState(-1)
   useEffect(() => {
-    const ready = Boolean(editing?.typed && editing.value.trim() && shownChoices?.length)
-    setPicked(ready ? 0 : -1)
+    setPicked(shownChoices && editing ? autoPick(shownChoices, editing.value, editing.typed) : -1)
     // Подсветку сбрасываем на смену набранного, а не на каждый ререндер.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownChoices])
@@ -1073,9 +1055,13 @@ export function Grid({
               >
                 {/* Ничего не подошло — набранное запишется как есть: своё
                     название вписать можно, список только подсказывает. */}
-                {shownChoices.length === 0 && (
+                {/* Что сделает Enter, когда ничего не подсвечено: человек должен
+                    это видеть, а не угадывать. */}
+                {editing.typed && editing.value.trim() !== '' && picked < 0 && (
                   <p className="px-3 py-1.5 text-xs text-ink-muted">
-                    Нет в списке — Enter запишет как набрано
+                    {shownChoices.length === 0
+                      ? 'Нет в списке — Enter запишет как набрано'
+                      : 'Enter запишет как набрано, ↓ — выбрать из списка'}
                   </p>
                 )}
                 {shownChoices.map((choice, position) => (

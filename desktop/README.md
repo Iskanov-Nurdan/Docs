@@ -26,7 +26,10 @@
 
 1. Поднять `version` в `package.json` (например, `1.0.1`).
 2. Собрать установщики:
-   - **Windows** — у себя: `cd desktop && npm install && npm run dist`;
+   - **Windows** — у себя: `cd desktop && npm install && npm run dist`
+     (сборщик берёт Electron из `node_modules`, а не распаковывает архив:
+     антивирус Windows блокирует переименование свежераспакованной папки,
+     и сборка падала с `EPERM`);
    - **macOS** — `.dmg` собирается только на Mac. Без Mac: GitHub → Actions →
      «Приложение для компьютера» → Run workflow (или тег
      `git tag desktop-v1.0.1 && git push --tags`). Оба установщика лежат
