@@ -72,6 +72,13 @@ const isOwnUrl = (url) => {
   }
 }
 
+/** Свой адрес, по которому отдаётся файл, а не страница. */
+const isDownloadUrl = (url) => {
+  if (!isOwnUrl(url)) return false
+  const { pathname } = new URL(url)
+  return /^\/api\/files\/[^/]+\/download\/?$/.test(pathname) || pathname.startsWith('/media/')
+}
+
 /** Чужие адреса — в системный браузер, и только http(s) и почта. */
 function openOutside(url) {
   try {
@@ -167,6 +174,13 @@ app.on('web-contents-created', (_event, contents) => {
   // Ссылки «открыть в новой вкладке»: свои — новым окном приложения,
   // чужие — в браузере.
   contents.setWindowOpenHandler(({ url }) => {
+    // Ссылка на файл (выгрузка таблицы) — скачиваем сразу, без окна. Браузер
+    // сам закрывает вкладку, открытую ради скачивания, а здесь оставалось
+    // пустое белое окно поверх таблицы.
+    if (isDownloadUrl(url)) {
+      contents.downloadURL(url)
+      return { action: 'deny' }
+    }
     if (isOwnUrl(url)) {
       return {
         action: 'allow',
