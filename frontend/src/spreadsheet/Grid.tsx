@@ -55,6 +55,9 @@ type Props = {
   matches?: { row: number; col: number }[]
 }
 
+/** Текст варианта для сравнения с набранным: без регистра и «ё». */
+const foldChoice = (text: string) => text.trim().toLowerCase().replace(/ё/g, 'е')
+
 /** Пустой набор скрытых строк — общий, чтобы не плодить объекты. */
 const EMPTY_ROWS: Set<number> = new Set()
 
@@ -151,7 +154,14 @@ export function Grid({
   const finished = useRef(false)
 
   const [viewport, setViewport] = useState({ top: 0, left: 0, height: 600, width: 800 })
-  const [editing, setEditing] = useState<{ row: number; col: number; value: string } | null>(null)
+  /**
+   * Правка ячейки. `typed` — человек уже что-то набрал: с этого момента
+   * список выбора сужается по набранному. Пока не набрал (открыл ячейку
+   * двойным щелчком), список показывается целиком.
+   */
+  const [editing, setEditing] = useState<
+    { row: number; col: number; value: string; typed: boolean } | null
+  >(null)
   const [resizing, setResizing] = useState<{ col: number; width: number } | null>(null)
 
   const rows = rowCount(sheet)
@@ -275,6 +285,46 @@ export function Grid({
   }, [editing, sheet, version, places, transitAmounts])
 
   /**
+   * Список выбора по набранному: «би» оставляет «Бишкек», «ош» — «Ош» и
+   * «Ошская обл.». Сначала то, что начинается с набранного, потом то, где оно
+   * внутри. Регистр и «ё» не важны.
+   */
+  const shownChoices = useMemo(() => {
+    if (!choices || !editing) return null
+    const needle = foldChoice(editing.value)
+    if (!editing.typed || !needle) return choices
+
+    const starts: string[] = []
+    const inside: string[] = []
+    for (const choice of choices) {
+      const folded = foldChoice(choice)
+      if (folded.startsWith(needle)) starts.push(choice)
+      else if (folded.includes(needle)) inside.push(choice)
+    }
+    return [...starts, ...inside]
+  }, [choices, editing])
+
+  // Подсвеченный вариант: Enter запишет его. Как только что-то набрали и
+  // нашлось совпадение, первое подсвечено сразу — набрал «би», нажал Enter,
+  // и в ячейке «Бишкек». Без набора не подсвечено ничего: Enter оставляет
+  // ячейку как была.
+  const [picked, setPicked] = useState(-1)
+  useEffect(() => {
+    const ready = Boolean(editing?.typed && editing.value.trim() && shownChoices?.length)
+    setPicked(ready ? 0 : -1)
+    // Подсветку сбрасываем на смену набранного, а не на каждый ререндер.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownChoices])
+
+  const choicesList = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // Подсвеченный вариант не должен уезжать за край короткого списка.
+    choicesList.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [picked])
+
+  /**
    * Точки по пути: выбор сразу нескольких.
    *
    * Через одну точку рейс идёт редко — обычно это Кашгар, потом Нарын, потом
@@ -356,7 +406,13 @@ export function Grid({
     (row: number, col: number, initial?: string) => {
       if (!editable) return
       finished.current = false
-      setEditing({ row, col, value: initial ?? readRaw(sheet, row, col) ?? '' })
+      setEditing({
+        row,
+        col,
+        value: initial ?? readRaw(sheet, row, col) ?? '',
+        // Начали печатать прямо на ячейке — первая буква уже набрана.
+        typed: initial !== undefined,
+      })
     },
     [editable, sheet],
   )
@@ -904,12 +960,25 @@ export function Grid({
                 ref={inputRef}
                 value={editing.value}
                 aria-label="Значение ячейки"
-                onChange={(event) => setEditing({ ...editing, value: event.target.value })}
+                onChange={(event) =>
+                  setEditing({ ...editing, value: event.target.value, typed: true })}
+                aria-autocomplete={shownChoices && !viaChoices ? 'list' : undefined}
+                aria-controls={shownChoices && !viaChoices ? 'cell-choices' : undefined}
                 onBlur={() => finishEditing()}
                 onKeyDown={(event) => {
+                  // Стрелки ходят по списку выбора («Через» — со своими галочками).
+                  const list = viaChoices ? null : shownChoices
+                  if (list && list.length > 0
+                    && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                    event.preventDefault()
+                    setPicked((current) => (event.key === 'ArrowDown'
+                      ? Math.min(current + 1, list.length - 1)
+                      : Math.max(current - 1, -1)))
+                    return
+                  }
                   if (event.key === 'Enter') {
                     event.preventDefault()
-                    finishEditing('down')
+                    finishEditing('down', list && picked >= 0 ? list[picked] : undefined)
                   } else if (event.key === 'Tab') {
                     event.preventDefault()
                     finishEditing('right')
@@ -989,8 +1058,12 @@ export function Grid({
               </div>
             )}
 
-            {editing && !viaChoices && choices && (
+            {editing && !viaChoices && shownChoices && (
               <div
+                ref={choicesList}
+                id="cell-choices"
+                role="listbox"
+                aria-label="Варианты для ячейки"
                 className="absolute z-20 max-h-48 min-w-32 overflow-y-auto rounded-xl border border-hairline bg-surface py-1 shadow-lg"
                 style={{
                   top: cellTop(editing.row) + ROW_HEIGHT,
@@ -998,10 +1071,19 @@ export function Grid({
                   minWidth: Math.max(offsets[editing.col + 1] - offsets[editing.col], 140),
                 }}
               >
-                {choices.map((choice) => (
+                {/* Ничего не подошло — набранное запишется как есть: своё
+                    название вписать можно, список только подсказывает. */}
+                {shownChoices.length === 0 && (
+                  <p className="px-3 py-1.5 text-xs text-ink-muted">
+                    Нет в списке — Enter запишет как набрано
+                  </p>
+                )}
+                {shownChoices.map((choice, position) => (
                   <button
                     key={choice}
                     type="button"
+                    role="option"
+                    aria-selected={position === picked}
                     /**
                      * Записываем на нажатии указателя и гасим событие.
                      *
@@ -1016,7 +1098,10 @@ export function Grid({
                       event.stopPropagation()
                       finishEditing('none', choice)
                     }}
-                    className="block w-full px-3 py-1.5 text-left text-sm text-ink hover:bg-surface-muted"
+                    className={[
+                      'block w-full px-3 py-1.5 text-left text-sm text-ink hover:bg-surface-muted',
+                      position === picked ? 'bg-accent/10' : '',
+                    ].join(' ')}
                   >
                     {choice}
                   </button>
