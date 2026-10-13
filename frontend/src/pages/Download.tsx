@@ -1,31 +1,33 @@
 /**
- * Страница «Скачать приложение» — /download.
+ * Страница «Скачать» — /download, приложение для Windows и macOS.
  *
- * Открывается и без входа: ссылку отправляют новому сотруднику до того, как
- * ему завели учётную запись. Установщики лежат на сервере в /downloads/,
- * а что там сейчас — описано в latest.json (его пишет scripts/push-desktop.sh).
+ * Одна большая кнопка — под систему посетителя: человек с Windows не должен
+ * разбираться, какой из файлов его. Установщик для другой системы — скромной
+ * ссылкой под ней.
  *
- * Своя система выделена и стоит первой: человек с Windows не должен
- * разбираться, какая из двух кнопок его.
+ * Вошедшему страница показывается внутри сайта, с левым меню — это обычный
+ * его раздел. Без входа она тоже открывается: ссылку отправляют новому
+ * сотруднику до того, как ему завели учётную запись.
+ *
+ * Установщики лежат на сервере в /downloads/, а что там сейчас — описано
+ * в latest.json (его пишет scripts/push-desktop.sh).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '@/api'
+import { AppLayout } from '@/components/AppLayout'
 import { useAuth } from '@/store/auth'
 import { DownloadIcon, MonitorIcon } from '@/components/icons'
-import type { DesktopInstaller, DesktopRelease } from '@/types'
+import type { DesktopRelease } from '@/types'
 
 type Platform = 'windows' | 'mac'
 
-type Visitor = Platform | 'mobile' | 'other'
-
-/** Система посетителя по строке браузера — только чтобы выделить нужную кнопку. */
-function detectVisitor(): Visitor {
+/** Система посетителя по строке браузера — только чтобы выбрать кнопку. */
+function detectPlatform(): { platform: Platform; mobile: boolean } {
   const agent = navigator.userAgent
-  if (/Android|iPhone|iPad|iPod/i.test(agent)) return 'mobile'
-  if (/Windows/i.test(agent)) return 'windows'
-  if (/Macintosh|Mac OS X/i.test(agent)) return 'mac'
-  return 'other'
+  const mobile = /Android|iPhone|iPad|iPod/i.test(agent)
+  const mac = !mobile && /Macintosh|Mac OS X/i.test(agent)
+  return { platform: mac ? 'mac' : 'windows', mobile }
 }
 
 /** Страница открыта внутри самого приложения — скачивать нечего. */
@@ -46,7 +48,7 @@ const PLATFORMS: Record<Platform, { title: string; note: string; steps: string[]
   },
   mac: {
     title: 'macOS',
-    note: 'Для Mac на Apple M1–M4 и на Intel, macOS 12 и новее',
+    note: 'Mac на Apple M1–M4 и на Intel, macOS 12 и новее',
     steps: [
       'Откройте скачанный файл и перетащите «ALI trade» в папку «Программы».',
       'При первом запуске нажмите на значок правой кнопкой мыши → «Открыть» → «Открыть».',
@@ -56,11 +58,41 @@ const PLATFORMS: Record<Platform, { title: string; note: string; steps: string[]
 }
 
 export function DownloadPage() {
-  const user = useAuth((state) => state.user)
+  const { user, initialized } = useAuth()
+
+  // Пока сессия восстанавливается, неизвестно, рисовать ли меню сайта.
+  if (!initialized) return <p className="p-12 text-center text-ink-muted">Загрузка…</p>
+
+  if (user) {
+    return (
+      <AppLayout title="Скачать">
+        <div className="mx-auto w-full max-w-xl px-4 py-6 sm:py-10">
+          <DownloadContent />
+        </div>
+      </AppLayout>
+    )
+  }
+
+  return (
+    <div className="flex min-h-dvh items-center justify-center bg-surface-muted px-4 py-10">
+      <main className="w-full max-w-xl rounded-2xl border border-hairline bg-surface p-6 shadow-sm sm:p-8">
+        <DownloadContent />
+        <div className="mt-6 border-t border-hairline pt-4 text-center text-sm">
+          <Link to="/login" className="text-ink-muted hover:underline">
+            Войти на сайте
+          </Link>
+        </div>
+      </main>
+    </div>
+  )
+}
+
+/** Сама страница: заголовок, кнопка, ссылка на другую систему и что делать после. */
+function DownloadContent() {
   const [release, setRelease] = useState<DesktopRelease | null>(null)
   const [state, setState] = useState<'loading' | 'error' | 'ready'>('loading')
   const [error, setError] = useState('')
-  const visitor = detectVisitor()
+  const { platform: visitor, mobile } = detectPlatform()
 
   const load = useCallback(async () => {
     setState('loading')
@@ -78,44 +110,42 @@ export function DownloadPage() {
     void load()
   }, [load])
 
-  // Своя система первой, вторая — следом.
-  const order: Platform[] = visitor === 'mac' ? ['mac', 'windows'] : ['windows', 'mac']
+  const other: Platform = visitor === 'mac' ? 'windows' : 'mac'
+  const main = release?.[visitor] ?? null
+  const second = release?.[other] ?? null
+  const info = PLATFORMS[visitor]
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-surface-muted px-4 py-10">
-      <main className="w-full max-w-2xl rounded-2xl border border-hairline bg-surface p-6 shadow-sm sm:p-8">
-        <div className="mb-6 flex items-start gap-3">
-          <span className="mt-0.5 text-accent">
-            <MonitorIcon size={30} />
-          </span>
-          <div>
-            <h1 className="text-2xl font-semibold text-ink">
-              ALI<span className="text-accent"> trade</span> для компьютера
-            </h1>
-            <p className="mt-1 text-sm text-ink-muted">
-              Те же таблицы в отдельном окне, с ярлыком на рабочем столе. Новые
-              возможности приходят сами — переустанавливать приложение не нужно.
-            </p>
-          </div>
-        </div>
+    <div className="text-center">
+      <span className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+        <MonitorIcon size={30} />
+      </span>
+      <h1 className="text-2xl font-semibold text-ink">
+        ALI<span className="text-accent"> trade</span> для компьютера
+      </h1>
+      <p className="mx-auto mt-2 max-w-md text-sm text-ink-muted">
+        Те же таблицы в отдельном окне, с ярлыком на рабочем столе. Новые
+        возможности приходят сами — переустанавливать приложение не нужно.
+      </p>
 
-        {insideApp() && (
-          <p role="status" className="mb-6 rounded-xl bg-accent/10 px-4 py-3 text-sm text-ink">
-            Вы уже в приложении — скачивать ничего не нужно.
-          </p>
-        )}
+      {insideApp() && (
+        <p role="status" className="mt-6 rounded-xl bg-accent/10 px-4 py-3 text-sm text-ink">
+          Вы уже в приложении — скачивать ничего не нужно.
+        </p>
+      )}
 
-        {visitor === 'mobile' && (
-          <p role="status" className="mb-6 rounded-xl bg-surface-muted px-4 py-3 text-sm text-ink">
-            Для телефона приложение не нужно: откройте этот сайт в браузере. Ниже —
-            установщики для компьютера, ссылку можно отправить себе на почту.
-          </p>
-        )}
+      {mobile && (
+        <p role="status" className="mt-6 rounded-xl bg-surface-muted px-4 py-3 text-sm text-ink">
+          На телефоне приложение не нужно — пользуйтесь сайтом в браузере.
+          Установщик откройте на компьютере.
+        </p>
+      )}
 
+      <div className="mt-8">
         {state === 'loading' && (
-          <div role="status" aria-label="Загрузка" className="grid gap-4 sm:grid-cols-2">
-            <div className="skeleton h-40 rounded-xl" />
-            <div className="skeleton h-40 rounded-xl" />
+          <div role="status" aria-label="Загрузка">
+            <div className="skeleton mx-auto h-12 w-64 rounded-full" />
+            <div className="skeleton mx-auto mt-3 h-4 w-40 rounded" />
           </div>
         )}
 
@@ -133,105 +163,62 @@ export function DownloadPage() {
         )}
 
         {state === 'ready' && !release && (
-          <div className="rounded-xl border border-hairline px-4 py-6 text-center">
-            <h2 className="mb-1 font-medium text-ink">Установщики ещё не выложены</h2>
-            <p className="text-sm text-ink-muted">
-              Пока пользуйтесь сайтом в браузере. Администратор выкладывает приложение
-              командой <code className="rounded bg-surface-muted px-1">scripts/push-desktop.sh</code>.
-            </p>
+          <div className="rounded-xl border border-hairline px-4 py-6">
+            <h2 className="mb-1 font-medium text-ink">Приложение ещё не выложено</h2>
+            <p className="text-sm text-ink-muted">Пока пользуйтесь сайтом в браузере.</p>
           </div>
         )}
 
         {state === 'ready' && release && (
           <>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {order.map((platform) => (
-                <PlatformCard
-                  key={platform}
-                  platform={platform}
-                  installer={release[platform]}
-                  version={release.version}
-                  recommended={platform === visitor}
-                />
-              ))}
-            </div>
-            <p className="mt-4 text-xs text-ink-muted">
-              Версия {release.version}
-              {release.published && ` от ${new Date(release.published).toLocaleDateString('ru-RU')}`}
+            {main ? (
+              <a
+                href={`/downloads/${encodeURIComponent(main.file)}`}
+                download={main.file}
+                className="inline-flex items-center justify-center gap-2.5 whitespace-nowrap rounded-full bg-accent px-7 py-3.5 text-base font-semibold text-white shadow-sm hover:opacity-90"
+              >
+                <DownloadIcon size={20} />
+                Скачать для {info.title}
+              </a>
+            ) : (
+              <p className="mx-auto max-w-sm rounded-xl border border-dashed border-hairline px-4 py-3 text-sm text-ink-muted">
+                Версия для {info.title} готовится.
+                {second && ' Пока можно скачать для другой системы — ссылка ниже.'}
+              </p>
+            )}
+
+            <p className="mt-3 text-xs text-ink-muted">
+              {main && `${megabytes(main.size)} · `}
+              версия {release.version} · {info.note}
             </p>
+
+            <p className="mt-4 text-sm">
+              {second ? (
+                <a
+                  href={`/downloads/${encodeURIComponent(second.file)}`}
+                  download={second.file}
+                  className="text-accent hover:underline"
+                >
+                  Скачать для {PLATFORMS[other].title} ({megabytes(second.size)})
+                </a>
+              ) : (
+                <span className="text-ink-muted">Версия для {PLATFORMS[other].title} готовится</span>
+              )}
+            </p>
+
+            {main && (
+              <div className="mx-auto mt-8 max-w-md rounded-xl bg-surface-muted px-4 py-3 text-left">
+                <h2 className="mb-2 text-sm font-medium text-ink">После скачивания</h2>
+                <ol className="list-decimal space-y-1.5 pl-5 text-sm text-ink-muted">
+                  {info.steps.map((stepText) => (
+                    <li key={stepText}>{stepText}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
           </>
         )}
-
-        <div className="mt-6 border-t border-hairline pt-4 text-sm">
-          <Link to={user ? '/documents' : '/login'} className="text-ink-muted hover:underline">
-            {user ? 'Вернуться к таблицам' : 'Войти на сайте'}
-          </Link>
-        </div>
-      </main>
-    </div>
-  )
-}
-
-type CardProps = {
-  platform: Platform
-  installer: DesktopInstaller | null
-  version: string
-  recommended: boolean
-}
-
-/** Карточка одной системы: кнопка скачивания и что делать после. */
-function PlatformCard({ platform, installer, version, recommended }: CardProps) {
-  const info = PLATFORMS[platform]
-
-  return (
-    <section
-      aria-labelledby={`download-${platform}`}
-      className={[
-        'flex flex-col rounded-xl border p-4',
-        recommended ? 'border-accent bg-accent/5' : 'border-hairline',
-      ].join(' ')}
-    >
-      <div className="mb-1 flex items-center gap-2">
-        <h2 id={`download-${platform}`} className="text-lg font-semibold text-ink">
-          {info.title}
-        </h2>
-        {recommended && (
-          <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
-            Ваша система
-          </span>
-        )}
       </div>
-      <p className="mb-4 text-xs text-ink-muted">{info.note}</p>
-
-      {installer ? (
-        <a
-          href={`/downloads/${encodeURIComponent(installer.file)}`}
-          download={installer.file}
-          aria-label={`Скачать для ${info.title}, ${megabytes(installer.size)}`}
-          className={[
-            'mb-4 flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-2.5 text-sm font-medium',
-            recommended
-              ? 'bg-accent text-white hover:opacity-90'
-              : 'border border-hairline text-ink hover:bg-surface-muted',
-          ].join(' ')}
-        >
-          <DownloadIcon size={18} />
-          Скачать
-          <span className={recommended ? 'text-white/80' : 'text-ink-muted'}>
-            · {megabytes(installer.size)}
-          </span>
-        </a>
-      ) : (
-        <p className="mb-4 rounded-full border border-dashed border-hairline px-4 py-2.5 text-center text-sm text-ink-muted">
-          Версия {version} для {info.title} готовится
-        </p>
-      )}
-
-      <ol className="list-decimal space-y-1.5 pl-5 text-xs text-ink-muted">
-        {info.steps.map((stepText) => (
-          <li key={stepText}>{stepText}</li>
-        ))}
-      </ol>
-    </section>
+    </div>
   )
 }

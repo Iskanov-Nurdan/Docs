@@ -81,12 +81,6 @@ export function LoginPage() {
         <p className="mt-6 border-t border-hairline pt-4 text-center text-xs text-ink-muted">
           Нет учётной записи? Её заводит администратор — обратитесь к нему.
         </p>
-
-        <p className="mt-3 text-center text-xs">
-          <Link to="/download" className="text-accent hover:underline">
-            Приложение для Windows и macOS
-          </Link>
-        </p>
       </form>
     </div>
   )

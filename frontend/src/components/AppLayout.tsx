@@ -13,13 +13,13 @@ import { Menu } from './Menu'
 import { NotificationsMenu } from './NotificationsMenu'
 import {
   CloseIcon,
+  DownloadIcon,
   LogoutIcon,
   MenuIcon,
   PlusIcon,
   RouteIcon,
   UploadIcon,
   SearchIcon,
-  MonitorIcon,
   SettingsIcon,
   ShieldIcon,
   SheetIcon,
@@ -39,6 +39,8 @@ const SECTIONS = [
   { to: '/starred', label: 'Избранное', Icon: StarIcon },
   { to: '/templates', label: 'Шаблоны', Icon: TemplateIcon },
   { to: '/routes', label: 'Точки и маршруты', Icon: RouteIcon },
+  // Приложение для Windows и macOS — единственный вход на страницу скачивания.
+  { to: '/download', label: 'Скачать', Icon: DownloadIcon },
   { to: '/trash', label: 'Корзина', Icon: TrashIcon },
 ]
 
@@ -278,11 +280,6 @@ export function AppLayout({ title, actions, children }: Props) {
                   ]
                 : []),
               { label: 'Настройки', icon: <SettingsIcon size={16} />, onSelect: () => navigate('/settings') },
-              {
-                label: 'Приложение для компьютера',
-                icon: <MonitorIcon size={16} />,
-                onSelect: () => navigate('/download'),
-              },
               {
                 label: 'Выйти',
                 icon: <LogoutIcon size={16} />,
