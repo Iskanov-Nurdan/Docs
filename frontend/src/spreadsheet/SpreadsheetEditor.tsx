@@ -30,7 +30,7 @@ import { ChartsDialog } from './ChartsDialog'
 import {
   ROUTE_COLUMNS, affectsArrival, fillAllArrivals, fillArrival, passCheckpoint, routeProgress,
 } from './routing'
-import { RouteProgress } from './RouteProgress'
+import { RouteProgress, RouteProgressPlaceholder } from './RouteProgress'
 import { SpreadsheetToolbar } from './SpreadsheetToolbar'
 import { Evaluator, cellRef } from './formula'
 import {
@@ -70,6 +70,7 @@ import {
   setFrozen,
   sheetAt,
   sheetList,
+  shiftFormula,
   writeCell,
 } from './model'
 import { bounds, cellAt, cells as cellsOfSelection, label, type Cell, type Selection } from './selection'
@@ -328,15 +329,21 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
     setFormulaDraft(null)
   }
 
-  const handlePaste = (row: number, col: number, grid: string[][]) => {
+  const handlePaste = (row: number, col: number, grid: string[][],
+                       origin: { row: number; col: number } | null) => {
     if (!editable) return
+    // Скопированная здесь же формула едет вместе с местом: «=A2*B2» на
+    // строку ниже — «=A3*B3». Раньше вставлялась та же «=A2*B2», и строка
+    // молча считала чужие числа.
+    const rows = origin ? row - origin.row : 0
+    const cols = origin ? col - origin.col : 0
 
     doc.transact(() => {
       grid.forEach((line, rowOffset) => {
         line.forEach((value, colOffset) => {
           const target = { row: row + rowOffset, col: col + colOffset }
           if (target.row >= MAX_ROWS || target.col >= MAX_COLS) return
-          writeCell(doc, sheet, target.row, target.col, value)
+          writeCell(doc, sheet, target.row, target.col, shiftFormula(value, rows, cols))
         })
       })
     })
@@ -523,6 +530,8 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
     : null
   const nextStop = progress?.stops.find((stop) => stop.state === 'next') ?? null
   const progressVehicleCol = findColumn(sheet, VEHICLE_COLUMNS)
+  const isRouteSheet = findColumn(sheet, ROUTE_COLUMNS.from) !== null
+    && findColumn(sheet, ROUTE_COLUMNS.to) !== null
 
   return (
     <div
@@ -651,8 +660,14 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
         </div>
       )}
 
+      {/* Сообщение — плашкой поверх таблицы, а не строкой над ней: строка
+          появлялась и через несколько секунд исчезала, и таблица прыгала
+          дважды — щелчок в этот момент попадал в чужую ячейку. */}
       {arrival && (
-        <p role="status" className="border-b border-hairline bg-surface-muted px-3 py-1.5 text-xs text-ink-muted">
+        <p
+          role="status"
+          className="animate-pop pointer-events-none fixed inset-x-0 bottom-6 z-40 mx-auto w-max max-w-[calc(100vw-2rem)] rounded-xl border border-hairline bg-surface px-4 py-2.5 text-sm text-ink shadow-lg"
+        >
           {arrival}
         </p>
       )}
@@ -768,6 +783,10 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
         />
       )}
 
+      {/* Место под полосу маршрута держится на всём листе с маршрутами, а не
+          только на строке рейса, — иначе таблица прыгала бы при каждом
+          переходе между строками. */}
+      {isRouteSheet && !progress && <RouteProgressPlaceholder />}
       {progress && (
         <RouteProgress
           progress={progress}

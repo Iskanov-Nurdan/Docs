@@ -28,6 +28,7 @@ import {
   type SheetMap,
   findCells,
   findInBook,
+  findVehicleInBook,
   replaceInCell,
   sheetAt,
 } from './model'
@@ -66,14 +67,17 @@ export function SheetFind({
   const [wholeCell, setWholeCell] = useState(false)
   const [allSheets, setAllSheets] = useState(false)
 
-  // Колонка с номером машины на этом листе. Нет такой — искать будем везде.
-  const vehicleCol = useMemo(
-    () => findColumn(sheet, VEHICLE_COLUMNS),
+  // Есть ли колонка с номером машины хоть на одном листе. Нет — ищем везде.
+  const hasVehicle = useMemo(
+    () => sheets.some((_item, position) => {
+      const target = sheetAt(doc, position)
+      return target !== null && findColumn(target, VEHICLE_COLUMNS) !== null
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sheet, version],
+    [doc, sheets.length, version],
   )
   const [byVehicle, setByVehicle] = useState(true)
-  const onlyVehicle = byVehicle && vehicleCol !== null
+  const onlyVehicle = byVehicle && hasVehicle
   const [current, setCurrent] = useState(0)
   const [note, setNote] = useState('')
 
@@ -84,24 +88,27 @@ export function SheetFind({
     input.current?.select()
   }, [])
 
-  const options: FindOptions = { matchCase, wholeCell, col: onlyVehicle ? vehicleCol : null }
+  const options: FindOptions = { matchCase, wholeCell, col: null }
 
-  // По всем листам ищем только без привязки к колонке: её номер на соседнем
-  // листе другой, и поиск ушёл бы не в тот столбец.
-  const searchAllSheets = allSheets && !onlyVehicle
+  // Номер машины ищется на всех листах сразу — в колонке «Машина» каждого:
+  // доставленная машина лежит на «Груз доставлен», и раньше поиск с открытого
+  // журнала её просто не находил. Обычный поиск — по листу или по книге.
+  const searchAllSheets = onlyVehicle || allSheets
 
   const hits = useMemo(
     () =>
-      searchAllSheets
-        ? findInBook(doc, query, displayFor, options)
-        : findCells(sheet, query, displayFor(sheetIndex), options).map((hit) => ({
-            ...hit,
-            sheet: sheetIndex,
-          })),
+      onlyVehicle
+        ? findVehicleInBook(doc, query, displayFor, sheetIndex, { wholeCell })
+        : allSheets
+          ? findInBook(doc, query, displayFor, options)
+          : findCells(sheet, query, displayFor(sheetIndex), options).map((hit) => ({
+              ...hit,
+              sheet: sheetIndex,
+            })),
     // displayFor пересоздаётся вместе с пересчётом значений, поэтому в
     // зависимостях достаточно версии книги.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc, sheet, sheetIndex, query, version, matchCase, wholeCell, searchAllSheets, onlyVehicle, vehicleCol],
+    [doc, sheet, sheetIndex, query, version, matchCase, wholeCell, allSheets, onlyVehicle],
   )
 
   // Подсвечивать можно только то, что на экране, — совпадения с других листов
@@ -287,9 +294,10 @@ export function SheetFind({
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
-        {vehicleCol !== null
-          && checkbox('find-vehicle', 'Только по номеру машины', byVehicle, setByVehicle)}
-        {checkbox('find-case', 'Учитывать регистр', matchCase, setMatchCase)}
+        {hasVehicle
+          && checkbox('find-vehicle', 'Только по номеру машины (на всех листах)', byVehicle, setByVehicle)}
+        {/* Номер сравнивается без регистра и раскладки — галочка там не нужна. */}
+        {!onlyVehicle && checkbox('find-case', 'Учитывать регистр', matchCase, setMatchCase)}
         {checkbox('find-whole', 'Ячейка целиком', wholeCell, setWholeCell)}
         {sheets.length > 1 && !onlyVehicle && checkbox('find-all', 'Все листы', allSheets, setAllSheets)}
 

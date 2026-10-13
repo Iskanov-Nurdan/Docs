@@ -19,6 +19,23 @@ type Props = {
   onMark: () => void
 }
 
+/**
+ * Высота полосы постоянная, и место под неё держится, даже когда выделена не
+ * строка рейса. Раньше полоса появлялась и пропадала вместе с выделением, и
+ * таблица под ней прыгала на 60 пикселей: человек выделял рейс, щёлкал по
+ * ячейке ниже — и попадал в чужую строку, на три строки ниже.
+ */
+const STRIP = 'h-16 overflow-hidden border-b border-hairline bg-surface px-3'
+
+/** Пустая полоса: место держится, а человек видит, что здесь появится. */
+export function RouteProgressPlaceholder() {
+  return (
+    <div className={`${STRIP} flex items-center text-xs text-ink-muted`}>
+      Встаньте на строку рейса — здесь появится его маршрут и кнопка отметки.
+    </div>
+  )
+}
+
 const two = (value: number) => String(value).padStart(2, '0')
 const when = (moment: Date) =>
   `${two(moment.getDate())}.${two(moment.getMonth() + 1)} ${two(moment.getHours())}:${two(moment.getMinutes())}`
@@ -50,9 +67,11 @@ export function RouteProgress({ progress, vehicle, editable, now, onMark }: Prop
   return (
     <section
       aria-label={`Маршрут ${vehicle || 'рейса'}`}
-      className="border-b border-hairline bg-surface px-3 py-2"
+      className={STRIP}
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* Одна строка, без переноса: длинный маршрут прокручивается вбок,
+          а высота полосы не меняется от рейса к рейсу. */}
+      <div className="flex h-full flex-nowrap items-center gap-x-3">
         <span className="shrink-0 text-xs text-ink-muted">
           Маршрут{vehicle ? ` ${vehicle}` : ''}:
         </span>

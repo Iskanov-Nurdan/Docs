@@ -132,7 +132,7 @@ export function AccountantPage() {
                         <span className="mt-1 block text-xs text-ink-muted">
                           {item.all.count === 0
                             ? 'Денег и грузов не найдено'
-                            : `Строк: ${item.all.count} · В пути: ${item.byStatus.in_transit.count} · Доставлено: ${item.byStatus.delivered.count}`}
+                            : `Грузов: ${item.all.count} · В пути: ${item.byStatus.in_transit.count} · Доставлено: ${item.byStatus.delivered.count}`}
                         </span>
                       </span>
                       <span className="flex shrink-0 flex-wrap gap-x-6 gap-y-2 text-xs text-ink-muted">
@@ -172,7 +172,12 @@ export function AccountantPage() {
           <section className="overflow-hidden rounded-2xl border border-hairline bg-surface">
             <div className="border-b border-hairline px-4 py-4 sm:px-5">
               <h3 className="font-semibold text-ink">{STATUS[status]}</h3>
-              <p className="mt-1 text-xs text-ink-muted">Строк: {rows.length}</p>
+              {/* Грузов столько же, сколько на карточке выше; строк может быть
+                  больше — у груза с перегрузом строка на каждую машину. */}
+              <p className="mt-1 text-xs text-ink-muted">
+                Грузов: {selected.byStatus[status].count}
+                {rows.length !== selected.byStatus[status].count && ` · строк с машинами: ${rows.length}`}
+              </p>
             </div>
             {rows.length === 0 ? (
               <p className="px-5 py-10 text-center text-sm text-ink-muted">

@@ -4,6 +4,7 @@ from apps.files.views import (
     DocumentExportView,
     DocumentImportView,
     DocumentSheetImportView,
+    ExportDownloadView,
     ExportStatusView,
     ImageUploadView,
 )
@@ -18,4 +19,5 @@ urlpatterns = [
     path("documents/<uuid:document_id>/export/", DocumentExportView.as_view(),
          name="document-export"),
     path("exports/<str:task_id>/", ExportStatusView.as_view(), name="export-status"),
+    path("files/<uuid:file_id>/download/", ExportDownloadView.as_view(), name="export-download"),
 ]

@@ -183,6 +183,13 @@ const RULES: { starts: string[]; tone: StatusTone; whole?: boolean }[] = [
 export const STATUS_TONES: StatusTone[] = [OVERDUE, TAX, PROGRESS, WAITING, TRANSFERRED, DONE, CANCELLED]
 
 /**
+ * Статусы, которые выбирают руками. «Перегружен» сюда не входит: его ставит
+ * сам перегруз вместе с новой строкой и номером груза. Выбранный вручную, он
+ * закрывал строку без продолжения — и «Прибыл» на ней уже не срабатывал.
+ */
+export const PICKABLE_STATUSES: StatusTone[] = STATUS_TONES.filter((tone) => tone.kind !== 'transferred')
+
+/**
  * Приводит написанное к сравнимому виду: регистр, «ё», кыргызские буквы.
  *
  * «Мөөнөтү өттү» люди набирают и через ө, и через о — раскладка есть не

@@ -17,7 +17,7 @@ import {
   UploadIcon,
 } from '@/components/icons'
 import { Select } from '@/components/Select'
-import { STATUS_TONES } from './statuses'
+import { PICKABLE_STATUSES } from './statuses'
 import { ToolbarButton } from './ToolbarButton'
 import type { Align, CellStyle, NumberFormat } from './model'
 
@@ -264,7 +264,7 @@ export function SpreadsheetToolbar({
         value=""
         options={[
           { value: '', label: 'Статус…' },
-          ...STATUS_TONES.map((tone) => ({ value: tone.label, label: tone.label })),
+          ...PICKABLE_STATUSES.map((tone) => ({ value: tone.label, label: tone.label })),
         ]}
         disabled={disabled}
         onChange={(value) => value && onFill(value)}

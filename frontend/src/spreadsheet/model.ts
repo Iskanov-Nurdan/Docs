@@ -534,9 +534,35 @@ export type FindOptions = {
   wholeCell?: boolean
   /** Искать только в этом столбце. null или undefined — по всему листу. */
   col?: number | null
+  /** Сравнивать как госномера — см. plateFold. */
+  plate?: boolean
+}
+
+/**
+ * Русские буквы, которые в госномере выглядят как латинские. Номер набирают
+ * то в одной раскладке, то в другой — «АJ8722» с русской «А» глазом не
+ * отличить от «AJ8722», а поиск их различал и ничего не находил.
+ */
+const PLATE_LOOKALIKES: Record<string, string> = {
+  а: 'a', в: 'b', е: 'e', ё: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't',
+  у: 'y', х: 'x',
+}
+
+/** Номер для сравнения: без регистра, пробелов, дефисов и путаницы раскладок. */
+export function plateFold(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\s\-_.·]/g, '')
+    .replace(/[авеёкмнорстух]/g, (letter) => PLATE_LOOKALIKES[letter] ?? letter)
 }
 
 function textMatches(text: string, needle: string, options: FindOptions): boolean {
+  if (options.plate) {
+    const left = plateFold(text)
+    const right = plateFold(needle)
+    if (!right) return false
+    return options.wholeCell ? left === right : left.includes(right)
+  }
   const left = options.matchCase ? text : text.toLowerCase()
   const right = options.matchCase ? needle : needle.toLowerCase()
   return options.wholeCell ? left === right : left.includes(right)
@@ -587,6 +613,37 @@ export function findCells(
 
   // Порядок обхода Y.Map произвольный, а человек ждёт движения сверху вниз.
   return hits.sort((a, b) => a.row - b.row || a.col - b.col)
+}
+
+/**
+ * Поиск машины по номеру во всей книге.
+ *
+ * Номер ищется в колонке «Машина» каждого листа — у каждого листа своя: на
+ * «Груз доставлен» она может стоять в другом месте. Доставленную машину
+ * ищут так же часто, как ту, что в пути, поэтому по одному листу искать
+ * нельзя. Открытый лист — первым: обычно ищут там, где смотрят.
+ */
+export function findVehicleInBook(
+  doc: Y.Doc,
+  query: string,
+  displayFor: (sheetIndex: number) => (row: number, col: number) => string,
+  current: number,
+  options: FindOptions = {},
+): CellHit[] {
+  const sheets = book(doc).toArray()
+  const order = sheets.map((_sheet, index) => index)
+    .sort((a, b) => (a === current ? -1 : b === current ? 1 : a - b))
+
+  const hits: CellHit[] = []
+  for (const sheetIndex of order) {
+    const sheet = sheets[sheetIndex]
+    const col = findColumn(sheet, VEHICLE_COLUMNS)
+    if (col === null) continue
+    for (const hit of findCells(sheet, query, displayFor(sheetIndex), { ...options, col, plate: true })) {
+      hits.push({ ...hit, sheet: sheetIndex })
+    }
+  }
+  return hits
 }
 
 /**
@@ -833,6 +890,26 @@ export function shiftFormulaToRow(raw: string, from: number, to: number): string
     row: (row) => {
       const next = row + delta
       return next < 0 || next >= MAX_ROWS ? null : next
+    },
+  })
+}
+
+/**
+ * Переносит формулу на другое место, как при копировании в Excel:
+ * «=A2*B2», скопированная на строку ниже и столбец правее, становится
+ * «=B3*C3». Закреплённое знаком доллара не двигается, а ссылка, уехавшая за
+ * край листа, становится ошибкой.
+ */
+export function shiftFormula(raw: string, rows: number, cols: number): string {
+  if ((rows === 0 && cols === 0) || !raw.startsWith('=')) return raw
+  return mapFormulaRefs(raw, {
+    row: (row) => {
+      const next = row + rows
+      return next < 0 || next >= MAX_ROWS ? null : next
+    },
+    col: (col) => {
+      const next = col + cols
+      return next < 0 || next >= MAX_COLS ? null : next
     },
   })
 }
@@ -1459,13 +1536,86 @@ function moveCols(doc: Y.Doc, sheet: SheetMap, move: (col: number) => number | n
   })
 }
 
+/**
+ * Переносит всё, что привязано к номеру столбца: фильтры, списки значений,
+ * правила подсветки, ширины, диаграммы и закрепление.
+ *
+ * Эти настройки хранятся по номеру столбца, и после вставки или удаления
+ * столбца они оставались на старых номерах — то есть на чужих столбцах.
+ * Фильтр «Груз = Цемент» после удаления «Груза» уезжал на соседний столбец
+ * и прятал все строки: выглядело так, будто данные стёрлись.
+ *
+ * `move` — новый номер столбца, null — столбец удалён (его настройки тоже).
+ */
+function moveColumnSettings(sheet: SheetMap, move: (col: number) => number | null): void {
+  const remap = <T>(all: Record<string, T> | undefined): Record<string, T> | undefined => {
+    if (!all) return all
+    const next: Record<string, T> = {}
+    for (const [key, value] of Object.entries(all)) {
+      const col = Number(key)
+      if (!Number.isInteger(col)) continue
+      const target = move(col)
+      if (target !== null) next[String(target)] = value
+    }
+    return next
+  }
+
+  const filters = sheet.get('filters') as Record<string, unknown> | undefined
+  if (filters) sheet.set('filters', remap(filters))
+  const validations = sheet.get('validations') as Record<string, string[]> | undefined
+  if (validations) sheet.set('validations', remap(validations))
+
+  const rules = sheet.get('rules') as ColorRule[] | undefined
+  if (Array.isArray(rules)) {
+    sheet.set('rules', rules.flatMap((rule) => {
+      const col = move(rule.col)
+      return col === null ? [] : [{ ...rule, col }]
+    }))
+  }
+
+  const list = sheet.get('charts') as ChartSpec[] | undefined
+  if (Array.isArray(list)) {
+    sheet.set('charts', list.flatMap((chart) => {
+      const labelCol = move(chart.labelCol)
+      const valueCol = move(chart.valueCol)
+      return labelCol === null || valueCol === null ? [] : [{ ...chart, labelCol, valueCol }]
+    }))
+  }
+
+  const widths = sheet.get('cols') as Y.Map<number> | undefined
+  if (widths && widths.size > 0) {
+    const entries = Array.from(widths.entries())
+    for (const [key] of entries) widths.delete(key)
+    for (const [key, width] of entries) {
+      const target = move(Number(key))
+      if (target !== null) widths.set(String(target), width)
+    }
+  }
+
+  // Закрепление считается по количеству столбцов слева: столбец, вставленный
+  // или удалённый внутри закреплённой части, сдвигает её границу.
+  const freeze = sheet.get('frozen') as Partial<Frozen> | undefined
+  const cols = Number(freeze?.cols ?? 0)
+  if (cols > 0) {
+    let kept = 0
+    for (let col = 0; col < cols; col += 1) if (move(col) !== null) kept += 1
+    const shifted = Array.from({ length: cols }, (_, col) => move(col))
+      .filter((col): col is number => col !== null)
+    const edge = shifted.length > 0 ? Math.max(...shifted) + 1 : 0
+    sheet.set('frozen', { ...freeze, cols: Math.max(kept, edge) })
+  }
+}
+
 export function insertCol(doc: Y.Doc, sheet: SheetMap, at: number): void {
   if (colCount(sheet) >= MAX_COLS) return
   const index = Math.max(0, Math.trunc(at))
+  const move = (col: number) => (col >= index ? col + 1 : col)
 
-  moveCols(doc, sheet, (col) => (col >= index ? col + 1 : col), 'desc')
+  // Одной транзакцией: Ctrl+Z отменяет вставку столбца целиком, а не по частям.
   doc.transact(() => {
+    moveCols(doc, sheet, move, 'desc')
     rewriteFormulas(sheet, (raw) => shiftColsInFormula(raw, index))
+    moveColumnSettings(sheet, move)
     sheet.set('colCount', Math.min(colCount(sheet) + 1, MAX_COLS))
   })
 }
@@ -1474,12 +1624,15 @@ export function deleteCol(doc: Y.Doc, sheet: SheetMap, at: number): void {
   if (colCount(sheet) <= 1) return
   const index = Math.max(0, Math.trunc(at))
 
-  moveCols(doc, sheet, (col) => {
+  const move = (col: number) => {
     if (col === index) return null
     return col > index ? col - 1 : col
-  }, 'asc')
+  }
+
   doc.transact(() => {
+    moveCols(doc, sheet, move, 'asc')
     rewriteFormulas(sheet, (raw) => dropColInFormula(raw, index))
+    moveColumnSettings(sheet, move)
     sheet.set('colCount', Math.max(colCount(sheet) - 1, 1))
   })
 }

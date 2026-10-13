@@ -160,6 +160,23 @@ class DocumentUpdateSerializer(serializers.Serializer):
                     raise serializers.ValidationError(
                         f"Ячейка {address} на листе {index} задана неверно."
                     )
+                # Внутри ячейки — тоже только простые значения: объект в
+                # «value» редактор показал бы как «[object Object]».
+                if isinstance(cell, dict) and any(
+                    cell.get(key) is not None and not isinstance(cell.get(key), (str, int, float, bool))
+                    for key in ("value", "display")
+                ):
+                    raise serializers.ValidationError(
+                        f"Ячейка {address} на листе {index} задана неверно."
+                    )
+
+            # Название листа — строка: редактор режет его до 50 знаков, а
+            # объект вместо названия показал бы как «[object Object]».
+            name = sheet.get("name", "")
+            if name is not None and not isinstance(name, str):
+                raise serializers.ValidationError(f"Название листа {index} должно быть строкой.")
+            if isinstance(name, str) and len(name) > 100:
+                raise serializers.ValidationError(f"Название листа {index} длиннее 100 знаков.")
         return value
 
     def validate(self, attrs):

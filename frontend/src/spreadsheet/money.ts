@@ -12,7 +12,7 @@
  * пересчиталась бы второй раз и уехала.
  */
 import type * as Y from 'yjs'
-import { applyStyle, findColumn, readRaw, writeCell, type NumberFormat, type SheetMap } from './model'
+import { applyStyle, findColumn, readRaw, readStyle, writeCell, type NumberFormat, type SheetMap } from './model'
 
 /** Заголовки денежных колонок. Как и везде, сверка по началу заголовка. */
 const COLUMNS = {
@@ -109,9 +109,17 @@ export function writeMoney(
 ): MoneyWrite {
   const text = raw.trim()
 
-  // Формулу и пустую ячейку не трогаем: там считает сам редактор.
+  // Формулу и пустую ячейку не пересчитываем: там считает сам редактор.
   if (!text || text.startsWith('=')) {
-    writeCell(doc, sheet, row, col, raw)
+    // Итог под долларовой колонкой показывался голым числом «0,68» без «$».
+    // Формат денег берём у ячейки над формулой — это обычно последняя сумма.
+    const above = row > 0 ? readStyle(sheet, row - 1, col).format : undefined
+    const own = readStyle(sheet, row, col).format
+    if (text.startsWith('=') && !own && above?.startsWith('currency')) {
+      put(doc, sheet, row, col, raw, above)
+    } else {
+      writeCell(doc, sheet, row, col, raw)
+    }
     return { kind: 'kept' }
   }
 
@@ -147,7 +155,7 @@ export function writeMoney(
  * человека пересчёт — одно действие, и отменяться он должен так же.
  */
 function put(doc: Y.Doc, sheet: SheetMap, row: number, col: number,
-             value: number, format: NumberFormat): void {
+             value: number | string, format: NumberFormat): void {
   doc.transact(() => {
     writeCell(doc, sheet, row, col, String(value))
     applyStyle(doc, sheet, [{ row, col }], { format })

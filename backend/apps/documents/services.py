@@ -23,6 +23,10 @@ EMPTY_SHEET = {
 }
 
 
+# Ограничения документа, которые вправе менять только владелец.
+RESTRICTION_FIELDS = frozenset({"allow_download", "allow_copy", "allow_print"})
+
+
 class DocumentService:
     def __init__(self):
         self.repository = DocumentRepository()
@@ -81,6 +85,11 @@ class DocumentService:
     @transaction.atomic
     def update(self, *, user, document: Document, data: dict, ip: str | None = None) -> Document:
         self.access.require(user=user, document=document, minimum=Role.EDITOR)
+        # Запреты на скачивание, копирование и печать ставит владелец — и
+        # снимает тоже только он. Раньше любой редактор одним запросом
+        # возвращал себе скачивание и выгружал таблицу.
+        if RESTRICTION_FIELDS & data.keys():
+            self.access.require(user=user, document=document, minimum=Role.OWNER)
 
         renamed = "title" in data and data["title"] != document.title
         moved = "folder_id" in data

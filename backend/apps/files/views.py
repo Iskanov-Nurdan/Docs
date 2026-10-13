@@ -1,5 +1,9 @@
 """API файлов: загрузка изображений, импорт и выгрузка документов."""
+from django.core import signing
+from django.http import FileResponse
+from django.urls import reverse
 from rest_framework import serializers, status
+from rest_framework.permissions import AllowAny
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +20,23 @@ from apps.permissions.services import AccessService
 
 EXPORT_FORMATS = {"xlsx", "csv", "pdf", "docx", "txt", "html"}
 
+# Ссылка на готовую выгрузку живёт десять минут: её хватает, чтобы браузер
+# начал скачивание, а пересланная или осевшая в истории ссылка протухает.
+EXPORT_LINK_TTL = 10 * 60
+EXPORT_LINK_SALT = "files.export-download"
+
+
+def export_download_url(stored: StoredFile) -> str:
+    """Подписанная ссылка на выгрузку — без входа, но только на десять минут.
+
+    Прямой адрес /media/… открывался кем угодно и навсегда, мимо прав и
+    запрета скачивания. Окно браузера заголовок авторизации не передаёт,
+    поэтому вместо него подпись в самой ссылке.
+    """
+    signature = signing.TimestampSigner(salt=EXPORT_LINK_SALT).sign(str(stored.id))
+    path = reverse("export-download", kwargs={"file_id": stored.id})
+    return f"{path}?s={signature}"
+
 
 class StoredFileSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
@@ -27,6 +48,8 @@ class StoredFileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_url(self, stored: StoredFile) -> str:
+        if stored.kind == StoredFile.Kind.EXPORT:
+            return export_download_url(stored)
         return stored.file.url
 
 
@@ -169,3 +192,34 @@ class ExportStatusView(APIView):
             raise NotFoundError("Задача не найдена.")
 
         return Response({"status": "ready", "file": StoredFileSerializer(stored).data})
+
+
+class ExportDownloadView(APIView):
+    """Скачивание выгрузки по подписанной ссылке из ExportStatusView."""
+
+    permission_classes = (AllowAny,)
+    authentication_classes = ()
+
+    def get(self, request, file_id):
+        signature = request.query_params.get("s", "")
+        try:
+            signed_id = signing.TimestampSigner(salt=EXPORT_LINK_SALT).unsign(
+                signature, max_age=EXPORT_LINK_TTL,
+            )
+        except signing.SignatureExpired as error:
+            raise NotFoundError("Ссылка на выгрузку устарела — выгрузите документ ещё раз.") from error
+        except signing.BadSignature as error:
+            raise NotFoundError("Файл не найден.") from error
+        if signed_id != str(file_id):
+            raise NotFoundError("Файл не найден.")
+
+        stored = StoredFile.objects.filter(id=file_id, kind=StoredFile.Kind.EXPORT).first()
+        if stored is None or not stored.file:
+            raise NotFoundError("Файл не найден.")
+
+        return FileResponse(
+            stored.file.open("rb"),
+            as_attachment=True,
+            filename=stored.original_name,
+            content_type=stored.content_type,
+        )

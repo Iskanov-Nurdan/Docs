@@ -16,6 +16,13 @@ app.conf.beat_schedule = {
         "task": "apps.documents.tasks.purge_trash",
         "schedule": crontab(hour=3, minute=30),
     },
+    # Выгрузки живут сутки (EXPORT_TTL), но удалять их было некому: задача
+    # была написана, а в расписание не попала, и файлы копились на диске
+    # вечно — старые к тому же открывались по прямой ссылке.
+    "cleanup-expired-files-daily": {
+        "task": "apps.documents.tasks.cleanup_expired_files",
+        "schedule": crontab(hour=4, minute=0),
+    },
     # Снимок версии раз в час — чтобы история не зависела от того,
     # закрыл ли пользователь вкладку.
     "snapshot-active-documents": {

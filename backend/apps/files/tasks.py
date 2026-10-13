@@ -1,5 +1,6 @@
 """Фоновая подготовка файлов: выгрузка и разбор загруженных документов."""
 import logging
+import uuid
 from datetime import timedelta
 
 from celery import shared_task
@@ -69,7 +70,17 @@ def export_document(self, document_id: str, export_format: str, user_id: str) ->
         document=document,
         expires_at=timezone.now() + EXPORT_TTL,
     )
-    stored.file.save(f"{safe_name}.{export_format}", ContentFile(payload), save=True)
+    # Выгрузки — в своей папке со случайным каталогом, а не рядом с картинками
+    # в uploads/: nginx эту папку напрямую не отдаёт, файл скачивается только
+    # по подписанной ссылке (apps.files.views.ExportDownloadView).
+    from django.core.files.storage import default_storage
+
+    path = default_storage.save(
+        f"exports/{timezone.now():%Y/%m}/{uuid.uuid4().hex}/{safe_name}.{export_format}",
+        ContentFile(payload),
+    )
+    stored.file.name = path
+    stored.save(update_fields=["file"])
 
     logger.info("Документ %s выгружен в %s (%s байт)", document_id, export_format, len(payload))
     return {"file_id": str(stored.id), "format": export_format}

@@ -153,8 +153,12 @@ def sheet_to_csv(content: dict) -> str:
 
 
 def sheet_to_text(content: dict) -> str:
-    """Табуляция между колонками — так значения переносятся в другие таблицы."""
-    return "\n".join("\t".join(row) for row in sheet_to_rows(content))
+    """Табуляция между колонками — так значения переносятся в другие таблицы.
+
+    Обезвреживается так же, как CSV: текстовый файл с табуляцией Excel
+    открывает таблицей, и «=HYPERLINK(...)» сработал бы у получателя.
+    """
+    return "\n".join("\t".join(_defuse(cell) for cell in row) for row in sheet_to_rows(content))
 
 
 def sheet_to_html(content: dict, *, title: str = "") -> str:

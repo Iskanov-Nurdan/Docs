@@ -235,7 +235,7 @@ const main = async () => {
   })
 
   await step(page, 'Формула считается', async () => {
-    await typeInCell(page, 160, 20, 'Сумма')
+    await typeInCell(page, 160, 20, 'Кол-во')
     await typeInCell(page, 160, 44, '10')
     await typeInCell(page, 160, 68, '20')
     await typeInCell(page, 160, 92, '30')
@@ -289,7 +289,7 @@ const main = async () => {
   await step(page, 'Поиск по таблице находит значение', async () => {
     await page.locator('[role="grid"]').click({ position: { x: 60, y: 20 } })
     await page.keyboard.press('Control+f')
-    const field = page.getByPlaceholder('Номер, артикул или часть текста')
+    const field = page.getByLabel('Что искать')
     await waitFor(async () => (await field.count()) > 0, { message: 'панель поиска не открылась' })
     await field.fill('01KG777')
     await waitFor(async () => /\b1\s*(из|\/)\s*1\b/i.test(await page.locator('body').innerText()),
@@ -418,7 +418,7 @@ const main = async () => {
     if (await build.count() > 0) await build.click()
     // Столбец чисел — второй (B): там 10/20/30.
     await dialog.getByLabel('Столбец чисел').click()
-    await page.getByRole('option', { name: /Сумма/ }).first().click()
+    await page.getByRole('option', { name: /Кол-во/ }).first().click()
     await waitFor(async () => (await dialog.locator('svg[role="img"]').count()) > 0,
       { message: 'диаграмма не нарисовалась' })
   })
@@ -443,7 +443,7 @@ const main = async () => {
   })
 
   await step(page, 'Меню «Файл»: выгрузка и шаблон на месте', async () => {
-    await page.getByRole('button', { name: 'Файл' }).click()
+    await page.getByRole('button', { name: 'Файл', exact: true }).click()
     await waitFor(async () => (await page.getByRole('menuitem', { name: /Скачать Excel/ }).count()) > 0,
       { message: 'в меню «Файл» нет выгрузки в Excel' })
     assert(await page.getByRole('menuitem', { name: /Сохранить как шаблон/ }).count() > 0,
@@ -451,7 +451,7 @@ const main = async () => {
   })
 
   await step(page, 'Сохранение своего шаблона', async () => {
-    await page.getByRole('button', { name: 'Файл' }).click()
+    await page.getByRole('button', { name: 'Файл', exact: true }).click()
     await page.getByRole('menuitem', { name: /Сохранить как шаблон/ }).click()
     const dialog = page.getByRole('dialog')
     await dialog.locator('input').first().fill('Шаблон QA')
@@ -558,7 +558,7 @@ const main = async () => {
       { message: 'шаблонов нет в галерее' })
     await page.getByText('Груз из Китая').first().click()
     await page.waitForURL(/\/documents\/[0-9a-f-]{36}/, { timeout: 25000 })
-    await waitFor(async () => (await page.getByText('Поставщик', { exact: true }).count()) > 0,
+    await waitFor(async () => (await page.getByText('Стоимость, $', { exact: true }).count()) > 0,
       { message: 'таблица из шаблона пустая' })
   })
 
@@ -575,13 +575,18 @@ const main = async () => {
 
   log('\n=== ПРАВА ДОСТУПА ===')
 
-  await step(page, 'Чужой документ недоступен', async () => {
+  await step(page, 'Чужой документ открывается, но удалить его нельзя', async () => {
     const id = docUrl.split('/').pop()
     const context2 = await browser.newContext({ locale: 'ru-RU' })
     const other = await context2.newPage()
     await login(other, OTHER)
     const { status } = await api(other, `/documents/${id}/`)
-    assert(status === 404 || status === 403, `чужой документ отдался с кодом ${status}`)
+    assert(status === 200, `общий документ отдался с кодом ${status}`)
+    const token = await other.evaluate(() => localStorage.getItem('docs.access'))
+    const removed = await other.request.delete(`${BASE}/api/documents/${id}/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert(removed.status() === 403, `чужой удалил документ: ${removed.status()}`)
     await context2.close()
   })
 

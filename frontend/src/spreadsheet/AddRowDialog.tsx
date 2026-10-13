@@ -34,7 +34,7 @@ import {
   shiftFormulaToRow,
   writeCell,
 } from './model'
-import { STATUS_TONES, isDeadlineHeader, parseDeadline } from './statuses'
+import { PICKABLE_STATUSES, isDeadlineHeader, parseDeadline } from './statuses'
 import { formatMoment, formatVia, routeHours, viaColumn } from './routing'
 import { useRoutes } from '@/store/routes'
 import { isMoneyColumn, writeMoney } from './money'
@@ -213,8 +213,13 @@ export function AddRowDialog({ doc, sheet, version, cols, rate, onAdded, onClose
     const via = viaColumn(sheet)
 
     doc.transact(() => {
-      if (plan.insert) insertRow(doc, sheet, row)
-      if (row >= rowCount(sheet)) growRows(doc, sheet, row - rowCount(sheet) + 1)
+      // Запись всегда получает новую строку, а не занимает «следующую пустую».
+      // Два диспетчера, добавлявшие рейсы в одну минуту, писали в одну и ту же
+      // пустую строку, и одна запись затирала другую. Вставленная строка —
+      // своя у каждого (у строк собственные идентификаторы), и при слиянии
+      // правок сохраняются обе.
+      if (row < rowCount(sheet)) insertRow(doc, sheet, row)
+      else growRows(doc, sheet, row - rowCount(sheet) + 1)
 
       for (const item of fields) {
         if (item.kind === 'formula') {
@@ -411,7 +416,7 @@ export function AddRowDialog({ doc, sheet, version, cols, rate, onAdded, onClose
                   value={value}
                   options={[
                     { value: '', label: 'Не указан' },
-                    ...STATUS_TONES.map((tone) => ({ value: tone.label, label: tone.label })),
+                    ...PICKABLE_STATUSES.map((tone) => ({ value: tone.label, label: tone.label })),
                   ]}
                   onChange={(next) => set(item.col, next)}
                   block

@@ -49,7 +49,12 @@ type Props = {
   onSelectionChange: (selection: Selection) => void
   onCommit: (row: number, col: number, raw: string) => void
   onClear: (cells: Cell[]) => void
-  onPaste: (row: number, col: number, rows: string[][]) => void
+  /**
+   * Вставка из буфера. `origin` — откуда скопировано, если скопировано из этой
+   * же таблицы: формулы тогда сдвигаются, как в Excel. null — вставка извне
+   * или после вырезания, формулы остаются как есть.
+   */
+  onPaste: (row: number, col: number, rows: string[][], origin: { row: number; col: number } | null) => void
   /** Строка формул сообщает сюда, что правку начали не в сетке. */
   editRequest: number
   /** Ячейки, найденные поиском по листу: подсвечиваются все сразу. */
@@ -588,7 +593,12 @@ export function Grid({
 
   // ------------------------------ Буфер обмена ------------------------------
 
-  const handleCopy = (event: React.ClipboardEvent) => {
+  // Что и откуда скопировано в последний раз. Буфер обмена хранит только
+  // текст, а чтобы сдвинуть формулу «=A2*B2» при вставке на строку ниже,
+  // нужно знать, откуда её взяли.
+  const lastCopy = useRef<{ text: string; row: number; col: number; cut: boolean } | null>(null)
+
+  const handleCopy = (event: React.ClipboardEvent, cut = false) => {
     if (editing) return
     const rect = bounds(selection)
     const lines: string[] = []
@@ -603,8 +613,10 @@ export function Grid({
       lines.push(line.join('\t'))
     }
 
-    event.clipboardData.setData('text/plain', lines.join('\n'))
+    const text = lines.join('\n')
+    event.clipboardData.setData('text/plain', text)
     event.preventDefault()
+    lastCopy.current = { text, row: rect.top, col: rect.left, cut }
   }
 
   const handlePaste = (event: React.ClipboardEvent) => {
@@ -613,12 +625,19 @@ export function Grid({
     if (!text) return
 
     event.preventDefault()
-    onPaste(selection.focus.row, selection.focus.col, parseClipboard(text))
+    // Своё же копирование узнаём по тексту: если в буфере уже что-то другое
+    // (скопировали из Excel), сдвигать нечего. Вырезанное, как в Excel,
+    // переезжает со ссылками как есть.
+    const copied = lastCopy.current
+    const origin = copied && !copied.cut && copied.text === text.replace(/\r\n?/g, '\n')
+      ? { row: copied.row, col: copied.col }
+      : null
+    onPaste(selection.focus.row, selection.focus.col, parseClipboard(text), origin)
   }
 
   const handleCut = (event: React.ClipboardEvent) => {
     if (editing || !editable) return
-    handleCopy(event)
+    handleCopy(event, true)
     onClear(cellsInSelection())
   }
 
