@@ -1,6 +1,7 @@
 /** Методы API — по одному на конечную точку бэкенда. */
-import { request, tokens } from './client'
+import { ApiError, request, tokens } from './client'
 import type {
+  DesktopRelease,
   AdminSummary,
   AdminUser,
   AccountantDashboard,
@@ -216,6 +217,23 @@ export const api = {
     request<void>(`/documents/${documentId}/publish/`, { method: 'DELETE' }),
   getPublished: (publicId: string) =>
     request<{ title: string; content: unknown; published_at: string }>(`/published/${publicId}/`),
+  /**
+   * Текущая версия приложения для компьютера. Это не API, а статический файл
+   * рядом с установщиками, поэтому без токена и без префикса /api.
+   * null — установщики ещё не выкладывали.
+   */
+  desktopRelease: async (): Promise<DesktopRelease | null> => {
+    const response = await fetch('/downloads/latest.json', { cache: 'no-cache' })
+    if (response.status === 404) return null
+    if (!response.ok) {
+      throw new ApiError(response.status, 'Не удалось узнать текущую версию приложения')
+    }
+    const data: unknown = await response.json().catch(() => null)
+    if (!data || typeof data !== 'object' || typeof (data as DesktopRelease).version !== 'string') {
+      throw new ApiError(500, 'Описание версии приложения повреждено')
+    }
+    return data as DesktopRelease
+  },
 }
 
 export { ApiError, onUnauthorized, refreshTokens, tokens } from './client'

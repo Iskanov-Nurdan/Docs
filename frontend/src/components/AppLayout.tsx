@@ -19,6 +19,7 @@ import {
   RouteIcon,
   UploadIcon,
   SearchIcon,
+  MonitorIcon,
   SettingsIcon,
   ShieldIcon,
   SheetIcon,
@@ -277,6 +278,11 @@ export function AppLayout({ title, actions, children }: Props) {
                   ]
                 : []),
               { label: 'Настройки', icon: <SettingsIcon size={16} />, onSelect: () => navigate('/settings') },
+              {
+                label: 'Приложение для компьютера',
+                icon: <MonitorIcon size={16} />,
+                onSelect: () => navigate('/download'),
+              },
               {
                 label: 'Выйти',
                 icon: <LogoutIcon size={16} />,

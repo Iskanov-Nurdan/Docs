@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>ALI trade — нет связи</title>
+  <style>
+    :root {
+      --surface: #ffffff;
+      --ink: #111827;
+      --ink-muted: #6b7280;
+      --accent: #2a7ad6;
+      --hairline: #e5e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #111827;
+        --ink: #f3f4f6;
+        --ink-muted: #9ca3af;
+        --hairline: #374151;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: var(--surface);
+      color: var(--ink);
+      font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+    }
+    main { max-width: 420px; text-align: center; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 0 0 20px; color: var(--ink-muted); }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 22px;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    small { display: block; margin-top: 16px; color: var(--ink-muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Нет связи с сервером</h1>
+    <p>
+      Проверьте интернет. Правки, сделанные до обрыва, сохранены на этом
+      компьютере и уйдут на сервер, как только связь вернётся.
+    </p>
+    <button type="button" id="retry">Повторить</button>
+    <small id="status" role="status" aria-live="polite"></small>
+  </main>
+  <script>
+    // Адрес сервера передаёт main.js — страница сама его не знает.
+    const target = new URLSearchParams(location.search).get('url') || 'https://app.alitrade.tw1.ru/'
+    const status = document.getElementById('status')
+    const retry = () => { location.href = target }
+
+    document.getElementById('retry').addEventListener('click', retry)
+
+    // Сами пробуем раз в 15 секунд: человек может отойти и не нажимать кнопку.
+    let left = 15
+    setInterval(() => {
+      left -= 1
+      if (left <= 0) retry()
+      else status.textContent = `Повторим сами через ${left} с`
+    }, 1000)
+    window.addEventListener('online', retry)
+  </script>
+</body>
+</html>

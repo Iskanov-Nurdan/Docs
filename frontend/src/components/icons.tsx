@@ -253,6 +253,16 @@ export function DownloadIcon(props: IconProps) {
   )
 }
 
+/** Компьютер: приложение для Windows и macOS. */
+export function MonitorIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3.5" y="4.5" width="17" height="11.5" rx="1.8" />
+      <path d="M9 20h6M12 16v4" />
+    </Icon>
+  )
+}
+
 export function HistoryIcon(props: IconProps) {
   return (
     <Icon {...props}>

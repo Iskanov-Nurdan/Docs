@@ -1,0 +1,56 @@
+{
+  "name": "alitrade-desktop",
+  "productName": "ALI trade",
+  "version": "1.0.0",
+  "description": "ALI trade для Windows и macOS: журнал рейсов и таблицы в отдельном окне",
+  "author": "ALI trade",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg --universal"
+  },
+  "build": {
+    "appId": "kg.alitrade.desktop",
+    "productName": "ALI trade",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "offline.html",
+      "assets/icon.png"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.business",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "ALI-trade-${version}-mac.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "ALI trade",
+      "artifactName": "ALI-trade-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  }
+}

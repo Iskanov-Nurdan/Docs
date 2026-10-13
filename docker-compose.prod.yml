@@ -154,6 +154,10 @@ services:
       # Путь можно сменить через WEB_DIR в .env, если статика лежит не рядом
       # с этим файлом, а, скажем, в /opt/alitrade/frontend.
       - ${WEB_DIR:-./web}:/usr/share/nginx/web:ro
+      # Установщики приложения для Windows и macOS — их выкладывает
+      # scripts/push-desktop.sh. Отдельно от web/, чтобы выкладка фронтенда
+      # их не стирала.
+      - ${DOWNLOADS_DIR:-./downloads}:/usr/share/nginx/downloads:ro
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
     # Сертификат меняется раз в два месяца, а конфигурацию nginx кеширует при

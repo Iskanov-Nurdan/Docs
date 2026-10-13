@@ -13,6 +13,7 @@ import { AdminPage } from '@/pages/Admin'
 import { PublishedPage } from '@/pages/Published'
 import { EditorPage } from '@/pages/Editor'
 import { AccountantPage } from '@/pages/Accountant'
+import { DownloadPage } from '@/pages/Download'
 import { applyTheme, readTheme, watchSystemTheme } from '@/utils/theme'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
@@ -84,6 +85,9 @@ export function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/confirm-email" element={<ConfirmEmailPage />} />
           <Route path="/public/document/:publicId" element={<PublishedPage />} />
+          {/* Без входа: ссылку на установщик отправляют до того, как заведена
+              учётная запись. */}
+          <Route path="/download" element={<DownloadPage />} />
 
           <Route
             path="/documents"

@@ -168,6 +168,26 @@ export type UsdRate = {
   date: string | null
 }
 
+/** Установщик приложения для одной системы. */
+export type DesktopInstaller = {
+  /** Имя файла в /downloads/. */
+  file: string
+  /** Размер в байтах. */
+  size: number
+}
+
+/**
+ * Текущая версия приложения для компьютера — /downloads/latest.json, его
+ * пишет scripts/push-desktop.sh. null у системы — под неё ещё не собрано.
+ */
+export type DesktopRelease = {
+  version: string
+  /** Дата выкладки, «2026-10-13». */
+  published: string
+  windows: DesktopInstaller | null
+  mac: DesktopInstaller | null
+}
+
 /** Листы, разобранные сервером из файла Excel или CSV. */
 export type ImportedBook = {
   /** Имя файла без расширения. */

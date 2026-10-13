@@ -146,6 +146,8 @@ services:
       - ./nginx/proxy_params_custom.conf:/etc/nginx/proxy_params_custom.conf:ro
       - static_files:/usr/share/nginx/static:ro
       - media_files:/usr/share/nginx/media:ro
+      # Установщики приложения — для проверки страницы «Скачать» локально.
+      - ./downloads:/usr/share/nginx/downloads:ro
     depends_on:
       - api
       - frontend

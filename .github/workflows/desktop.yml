@@ -1,0 +1,67 @@
+# Сборка приложения ALI trade для Windows и macOS.
+#
+# Установщик для macOS (.dmg) собирается только на Mac — поэтому сборка идёт
+# здесь, на машинах GitHub, а не на компьютере разработчика с Windows.
+#
+# Запуск: вкладка Actions → «Приложение для компьютера» → Run workflow,
+# или тег вида desktop-v1.0.1 (`git tag desktop-v1.0.1 && git push --tags`).
+# Готовые установщики — в артефактах запуска. Скачайте их в desktop/dist/
+# и выложите на сайт: SERVER=root@IP ./scripts/push-desktop.sh
+name: Приложение для компьютера
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Сборка (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            command: npm run dist
+            artifact: desktop/dist/*.exe
+          - name: macOS
+            os: macos-latest
+            command: npm run dist:mac
+            artifact: desktop/dist/*.dmg
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      # Сертификата разработчика нет: подпись только ad-hoc (identity "-" в
+      # package.json). Без этого флага сборщик искал бы сертификат в связке
+      # ключей и падал.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Зависимости
+        run: npm ci
+
+      - name: Проверка кода
+        run: node --check main.js
+
+      - name: Сборка установщика
+        run: ${{ matrix.command }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ALI-trade-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 30
