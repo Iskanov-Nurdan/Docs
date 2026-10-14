@@ -1,7 +1,7 @@
 /** Страница таблицы: шапка, участники, выгрузка, доступ и история. */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, tokens } from '@/api'
+import { ApiError, api, tokens } from '@/api'
 import { ExportMenu } from '@/components/ExportMenu'
 import { ArrowLeftIcon, HistoryIcon, ShareIcon } from '@/components/icons'
 import { Select } from '@/components/Select'
@@ -9,7 +9,7 @@ import { ShareDialog } from '@/components/ShareDialog'
 import { VersionHistory } from '@/components/VersionHistory'
 import { SpreadsheetEditor } from '@/spreadsheet/SpreadsheetEditor'
 import { useAuth } from '@/store/auth'
-import type { Document, EditorMode, Presence, Role, SaveStatus } from '@/types'
+import type { Document, EditorMode, LiveSnapshot, Presence, Role, SaveStatus, VersionDetail } from '@/types'
 
 const STATUS_LABELS: Record<SaveStatus, string> = {
   saved: 'Все изменения сохранены',
@@ -42,7 +42,13 @@ export function EditorPage() {
   const [document, setDocument] = useState<Document | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Сбой сети или сервера — повод попробовать ещё раз, в отличие от «нет доступа».
+  const [retryable, setRetryable] = useState(false)
   const [status, setStatus] = useState<SaveStatus>('saved')
+  // Версия, которую выбрали в истории: таблица запишет её поверх себя.
+  const [restoreRequest, setRestoreRequest] = useState<VersionDetail | null>(null)
+  // Как достать из редактора то, что на экране, — для сохранения версии.
+  const snapshot = useRef<(() => LiveSnapshot | null) | null>(null)
   const [presence, setPresence] = useState<Presence[]>([])
   const [mode, setMode] = useState<EditorMode>('editing')
   const [title, setTitle] = useState('')
@@ -57,8 +63,15 @@ export function EditorPage() {
       setTitle(loaded.title)
       setMode(allowedModes(loaded.my_role)[0])
       setError('')
-    } catch {
-      setError('Документ не найден или недоступен')
+      setRetryable(false)
+    } catch (err) {
+      // «Не найден» на обрыве связи отправлял человека искать таблицу,
+      // которая на месте: нужно просто повторить.
+      const transient = !(err instanceof ApiError) || err.status === 0 || err.status >= 500
+      setRetryable(transient)
+      setError(transient
+        ? 'Не удалось загрузить документ: нет связи с сервером или он временно недоступен'
+        : 'Документ не найден или недоступен')
     } finally {
       setLoading(false)
     }
@@ -89,7 +102,16 @@ export function EditorPage() {
   if (error || !document || !user) {
     return (
       <div className="animate-rise p-12 text-center">
-        <p className="mb-3 text-ink">{error || 'Документ недоступен'}</p>
+        <p role="alert" className="mb-3 text-ink">{error || 'Документ недоступен'}</p>
+        {retryable && (
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mb-3 mr-4 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+          >
+            Повторить
+          </button>
+        )}
         <Link to="/documents" className="text-accent hover:underline">
           Вернуться к списку
         </Link>
@@ -196,6 +218,12 @@ export function EditorPage() {
         mode={mode}
         onStatusChange={setStatus}
         onPresenceChange={setPresence}
+        restoreRequest={restoreRequest}
+        snapshotRef={snapshot}
+        onRestoreApplied={() => {
+          setRestoreRequest(null)
+          load()
+        }}
       />
 
       {dialog === 'share' && (
@@ -203,6 +231,7 @@ export function EditorPage() {
           document={document}
           onClose={() => setDialog('none')}
           onDocumentChange={setDocument}
+          getSnapshot={() => snapshot.current?.() ?? null}
         />
       )}
 
@@ -211,11 +240,12 @@ export function EditorPage() {
           documentId={document.id}
           role={document.my_role}
           onClose={() => setDialog('none')}
-          onRestored={() => {
+          getSnapshot={() => snapshot.current?.() ?? null}
+          onRestored={(version) => {
             setDialog('none')
-            // Восстановленная версия приходит в открытые вкладки приращением
-            // Yjs; страницу перечитываем ради свойств документа и заголовка.
-            load()
+            // Версию в таблицу записывает редактор — обычной правкой, которая
+            // дойдёт до всех открытых вкладок.
+            setRestoreRequest(version)
           }}
         />
       )}

@@ -8,12 +8,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '@/api'
 import { Modal } from '@/components/Modal'
 import { Select } from '@/components/Select'
-import type { Document, Permission, Publication, Role, ShareLink } from '@/types'
+import type { Document, LiveSnapshot, Permission, Publication, Role, ShareLink } from '@/types'
 
 type Props = {
   document: Document
   onClose: () => void
   onDocumentChange: (document: Document) => void
+  /** Текущее состояние редактора: публикуется то, что на экране сейчас. */
+  getSnapshot?: () => LiveSnapshot | null
 }
 
 const ROLES: { value: Exclude<Role, 'owner'>; label: string; hint: string }[] = [
@@ -28,7 +30,7 @@ const RESTRICTIONS: { key: 'allow_download' | 'allow_copy' | 'allow_print'; labe
   { key: 'allow_print', label: 'Разрешить печать' },
 ]
 
-export function ShareDialog({ document: doc, onClose, onDocumentChange }: Props) {
+export function ShareDialog({ document: doc, onClose, onDocumentChange, getSnapshot }: Props) {
   const [owner, setOwner] = useState<Permission | null>(null)
   const [permissions, setPermissions] = useState<Permission[]>([])
   const [link, setLink] = useState<ShareLink | null>(null)
@@ -126,7 +128,7 @@ export function ShareDialog({ document: doc, onClose, onDocumentChange }: Props)
 
   const publish = (autoUpdate: boolean) =>
     guard(async () => {
-      setPublication({ ...(await api.publish(doc.id, autoUpdate)), published: true })
+      setPublication({ ...(await api.publish(doc.id, autoUpdate, getSnapshot?.())), published: true })
       onDocumentChange({ ...doc, is_published: true })
     })
 

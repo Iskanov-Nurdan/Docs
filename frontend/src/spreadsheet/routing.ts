@@ -9,7 +9,7 @@
  * о чём договорились с водителем, и оно важнее норматива из справочника.
  */
 import type * as Y from 'yjs'
-import { hoursBetween } from '@/store/routes'
+import { hoursBetween, placeKey } from '@/store/routes'
 import type { RouteLeg } from '@/types'
 import { ARRIVAL_COLUMNS, findColumn, isRowClosed, readRaw, writeCell, type SheetMap } from './model'
 import { parseDeadline, statusTone } from './statuses'
@@ -80,29 +80,63 @@ export function parseVia(text: string): string[] {
 export const formatVia = (points: string[]) => points.filter(Boolean).join(' → ')
 
 /**
- * Время на весь путь: сумма плеч.
+ * Время между двумя точками по справочнику — кратчайшим путём через плечи.
  *
- * Бишкек → Кашгар → Ош складывается из двух известных плеч. Если хоть одно
- * неизвестно, пробуем прямое плечо: в справочнике может не быть промежуточной
- * точки, зато есть само направление.
+ * Прямого плеча «Иркештам — Достук» в справочнике нет: есть Иркештам →
+ * Каратай → Т → Достук. Раньше время считалось только по прямому плечу или
+ * по точкам, вписанным в «Через» до единой, и рейс без «Через» оставался без
+ * срока — ни в форме, ни кнопкой «Посчитать сроки». Теперь путь по плечам
+ * находится сам (алгоритм Дейкстры: плечей десятки, это мгновенно).
+ */
+export function pathHours(legs: RouteLeg[], from: string, to: string): number | null {
+  const direct = hoursBetween(legs, from, to)
+  if (direct !== null) return direct
+
+  const start = placeKey(from)
+  const goal = placeKey(to)
+  if (!start || !goal || start === goal) return null
+
+  const edges = new Map<string, Array<{ to: string; hours: number }>>()
+  for (const leg of legs) {
+    const hours = Number(leg.hours)
+    if (!Number.isFinite(hours) || hours <= 0) continue
+    const list = edges.get(leg.origin_key) ?? []
+    list.push({ to: leg.destination_key, hours })
+    edges.set(leg.origin_key, list)
+  }
+
+  const best = new Map<string, number>([[start, 0]])
+  const done = new Set<string>()
+  while (true) {
+    let current: string | null = null
+    for (const [key, value] of best) {
+      if (!done.has(key) && (current === null || value < (best.get(current) as number))) current = key
+    }
+    if (current === null) return null
+    if (current === goal) return best.get(current) as number
+    done.add(current)
+    for (const edge of edges.get(current) ?? []) {
+      const candidate = (best.get(current) as number) + edge.hours
+      if (candidate < (best.get(edge.to) ?? Infinity)) best.set(edge.to, candidate)
+    }
+  }
+}
+
+/**
+ * Время на весь путь: от точки к точке по порядку, каждый участок — по
+ * справочнику кратчайшим путём (см. pathHours).
  */
 export function routeHours(legs: RouteLeg[], from: string, via: string[], to: string): number | null {
   const points = [from, ...via, to].map((item) => item.trim()).filter(Boolean)
   if (points.length < 2) return null
 
   let total = 0
-  let complete = true
   for (let index = 0; index < points.length - 1; index += 1) {
-    const hours = hoursBetween(legs, points[index], points[index + 1])
-    if (hours === null) {
-      complete = false
-      break
-    }
+    const hours = pathHours(legs, points[index], points[index + 1])
+    if (hours === null) return null
     total += hours
   }
-
-  if (complete) return total
-  return hoursBetween(legs, from, to)
+  return total
 }
 
 /**
@@ -116,7 +150,7 @@ export function missingLeg(legs: RouteLeg[], from: string, via: string[],
                            to: string): string | null {
   const points = [from, ...via, to].map((item) => item.trim()).filter(Boolean)
   for (let index = 0; index < points.length - 1; index += 1) {
-    if (hoursBetween(legs, points[index], points[index + 1]) === null) {
+    if (pathHours(legs, points[index], points[index + 1]) === null) {
       return `${points[index]} → ${points[index + 1]}`
     }
   }
@@ -377,7 +411,7 @@ export function routeProgress(sheet: SheetMap, row: number, legs: RouteLeg[],
     // У закрытого рейса ждать нечего: он приехал, отменён или груз уже
     // на другой машине.
     if (!isPassed && !closed) {
-      const hours = previous && anchor ? hoursBetween(legs, previous, place) : null
+      const hours = previous && anchor ? pathHours(legs, previous, place) : null
       if (hours === null) {
         previous = ''
       } else {

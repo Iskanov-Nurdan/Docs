@@ -1,10 +1,23 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/store/auth'
 import { ApiError } from '@/api'
 
+/** Адрес, с которого отправили на вход, — только внутренний путь. */
+function returnPath(state: unknown): string {
+  const from = (state as { from?: { pathname?: unknown; search?: unknown; hash?: unknown } } | null)?.from
+  if (!from || typeof from.pathname !== 'string') return '/documents'
+  // «//host» браузер понимает как другой сайт — такой адрес не принимаем.
+  if (!from.pathname.startsWith('/') || from.pathname.startsWith('//')) return '/documents'
+  if (from.pathname === '/login') return '/documents'
+  const search = typeof from.search === 'string' ? from.search : ''
+  const hash = typeof from.hash === 'string' ? from.hash : ''
+  return `${from.pathname}${search}${hash}`
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { login, loading } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -15,7 +28,7 @@ export function LoginPage() {
     setError('')
     try {
       await login(email, password)
-      navigate('/documents')
+      navigate(returnPath(location.state), { replace: true })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Не удалось войти')
     }

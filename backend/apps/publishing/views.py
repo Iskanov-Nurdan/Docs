@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 
 from apps.core.exceptions import NotFoundError
 from apps.core.services import client_ip
+from apps.documents.live_state import save_live_state
 from apps.documents.models import DocumentActivity
 from apps.documents.repositories import DocumentRepository
 from apps.documents.services import DocumentService
@@ -45,6 +46,9 @@ class DocumentPublishView(APIView):
     def post(self, request, document_id):
         document = self._document(document_id)
         AccessService().require(user=request.user, document=document, minimum=Role.OWNER)
+        # Публикуется то, что автор видит в редакторе сейчас, а не снимок
+        # минутной давности: без этого свежая правка на страницу не попадала.
+        save_live_state(request, document)
 
         publication = getattr(document, "publication", None)
         if publication is None:

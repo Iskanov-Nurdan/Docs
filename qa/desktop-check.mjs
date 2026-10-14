@@ -115,6 +115,27 @@ try {
     out(true, 'Меню «Файл» → CSV', 'пункта CSV нет')
   }
 
+  // --- История версий в приложении ---
+  await page.goto(`http://localhost:8080/documents/${doc.id}`)
+  await grid.waitFor({ timeout: 30000 }); await sleep(1500)
+  page.on('dialog', (dialog) => dialog.accept().catch(() => {}))
+  await type(3, 1, 'версия-1'); await sleep(800)
+  await page.getByRole('button', { name: 'История' }).click()
+  await page.getByRole('button', { name: 'Сохранить текущую' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Сохранить', exact: true }).click(); await sleep(1500)
+  await page.getByRole('button', { name: 'Закрыть' }).click(); await sleep(400)
+  await grid.click({ position: { x: 330, y: 36 } }); await sleep(300)
+  await page.keyboard.type('X'); await page.keyboard.press('Enter'); await sleep(800)
+  await page.getByRole('button', { name: 'История' }).click()
+  await page.getByLabel('Список версий').locator('button').first().click(); await sleep(800)
+  await page.getByRole('button', { name: 'Восстановить эту версию' }).click(); await sleep(2500)
+  const close = page.getByRole('button', { name: 'Закрыть' })
+  if (await close.count()) await close.first().click()
+  await sleep(1000)
+  await page.screenshot({ path: 'shots/desktop/history.png' })
+  const restored = await page.evaluate(() => Array.from(document.querySelectorAll('[role="gridcell"]')).some((n) => n.textContent.trim() === 'версия-1'))
+  out(!restored, 'История: восстановление версии в приложении')
+
   await page.screenshot({ path: 'shots/desktop/editor.png' })
   await page.request.delete(`http://localhost:8080/api/documents/${doc.id}/`, { headers })
 } catch (error) {

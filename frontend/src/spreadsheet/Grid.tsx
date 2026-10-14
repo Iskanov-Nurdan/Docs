@@ -985,6 +985,9 @@ export function Grid({
                     finishEditing('right')
                   } else if (event.key === 'Escape') {
                     event.preventDefault()
+                    // Перевод фокуса ниже снимает его с поля, и onBlur записал
+                    // бы набранное — отмена превращалась в сохранение.
+                    finished.current = true
                     setEditing(null)
                     scrollRef.current?.focus()
                   }

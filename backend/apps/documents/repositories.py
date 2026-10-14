@@ -1,8 +1,18 @@
 """Запросы к документам и папкам."""
+import uuid
+
 from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db.models import Exists, OuterRef, Q, QuerySet
 
 from apps.documents.models import Document, Folder, StarredDocument
+
+
+def is_uuid(value) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
 
 
 class DocumentRepository:
@@ -42,6 +52,9 @@ class DocumentRepository:
         return self.active(user).exclude(owner=user)
 
     def by_id(self, document_id) -> Document | None:
+        # Кривой идентификатор из запроса — «не найден», а не сбой сервера.
+        if not is_uuid(document_id):
+            return None
         return self.base_queryset().filter(id=document_id).first()
 
     def search(self, user, query: str) -> QuerySet[Document]:
@@ -59,7 +72,8 @@ class DocumentRepository:
         Фрагмент ищется по триграммному индексу (миграция 0004), а не
         последовательным чтением таблицы.
         """
-        query = (query or "").strip()
+        # Нулевой байт Postgres в строке не принимает — запрос падал с 500.
+        query = (query or "").replace("\x00", "").strip()
         documents = self.active(user)
         if not query:
             return documents

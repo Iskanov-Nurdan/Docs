@@ -2,6 +2,8 @@
 import { ApiError, request, tokens } from './client'
 import type {
   DesktopRelease,
+  LiveSnapshot,
+  VersionDetail,
   AdminSummary,
   AdminUser,
   AccountantDashboard,
@@ -159,12 +161,18 @@ export const api = {
 
   // --- Версии ---
   listVersions: (documentId: string) => request<Version[]>(`/documents/${documentId}/versions/`),
-  saveVersion: (documentId: string, label?: string) =>
-    request<Version>(`/documents/${documentId}/versions/`, { method: 'POST', body: { label } }),
+  saveVersion: (documentId: string, label?: string, live?: LiveSnapshot | null) =>
+    request<Version>(`/documents/${documentId}/versions/`, {
+      method: 'POST',
+      body: { label, ...(live ?? {}) },
+    }),
   getVersion: (documentId: string, versionId: string) =>
-    request<Version & { content: unknown }>(`/documents/${documentId}/versions/${versionId}/`),
-  restoreVersion: (documentId: string, versionId: string) =>
-    request<Version>(`/documents/${documentId}/versions/${versionId}/restore/`, { method: 'POST' }),
+    request<VersionDetail>(`/documents/${documentId}/versions/${versionId}/`),
+  restoreVersion: (documentId: string, versionId: string, live?: LiveSnapshot | null) =>
+    request<Version>(`/documents/${documentId}/versions/${versionId}/restore/`, {
+      method: 'POST',
+      body: { ...(live ?? {}) },
+    }),
 
   // --- Шаблоны ---
   listTemplates: (params: Record<string, string> = {}) => request<Template[]>('/templates/', { params }),
@@ -208,10 +216,10 @@ export const api = {
 
   // --- Публикация ---
   getPublication: (documentId: string) => request<Publication>(`/documents/${documentId}/publish/`),
-  publish: (documentId: string, autoUpdate = false) =>
+  publish: (documentId: string, autoUpdate = false, live?: LiveSnapshot | null) =>
     request<Publication>(`/documents/${documentId}/publish/`, {
       method: 'POST',
-      body: { auto_update: autoUpdate },
+      body: { auto_update: autoUpdate, ...(live ?? {}) },
     }),
   unpublish: (documentId: string) =>
     request<void>(`/documents/${documentId}/publish/`, { method: 'DELETE' }),

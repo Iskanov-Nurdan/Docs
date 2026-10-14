@@ -58,23 +58,12 @@ class VersionService:
             metadata={"reason": "before_restore", "restored_version": version.version_number},
         )
 
-        document.content = version.content
-        document.ydoc_state = version.ydoc_state
-        document.last_edited_by = user
-        document.save(update_fields=["content", "ydoc_state", "last_edited_by", "updated_at"])
-
-        # Журнал приращений относится к прежнему состоянию: оставить его
-        # значило бы наложить старые правки поверх восстановленного текста.
-        from apps.documents.models import DocumentUpdate
-
-        DocumentUpdate.objects.filter(document=document).delete()
-
-        restored = self.create_snapshot(
-            document=document,
-            user=user,
-            label=f"Восстановлена версия {version.version_number}",
-            metadata={"reason": "restore", "source_version": version.version_number},
-        )
-        logger.info("Документ %s восстановлен до версии %s пользователем %s",
+        # Само содержимое сервер не подменяет. Раньше здесь записывалось старое
+        # состояние Yjs, но у открытых вкладок (и в их IndexedDB) лежало более
+        # новое: при синхронизации CRDT складывал их, новое побеждало, и
+        # восстановление молча отменялось. Теперь версию переписывает поверх
+        # таблицы редактор — обычной правкой, которая расходится всем
+        # участникам и отменяется Ctrl+Z (SpreadsheetEditor, replaceBook).
+        logger.info("Документ %s восстанавливается до версии %s пользователем %s",
                     document.id, version.version_number, user.email)
-        return restored
+        return version

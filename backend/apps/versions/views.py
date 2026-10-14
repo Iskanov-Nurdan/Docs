@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.exceptions import NotFoundError
+from apps.documents.live_state import save_live_state
 from apps.documents.repositories import DocumentRepository
 from apps.permissions.models import Role
 from apps.permissions.services import AccessService
@@ -40,6 +41,7 @@ class DocumentVersionsView(APIView):
         """Снимок по требованию: «сохранить текущую версию» в меню файла."""
         document = _document(document_id)
         AccessService().require(user=request.user, document=document, minimum=Role.EDITOR)
+        save_live_state(request, document)
         version = VersionService().create_snapshot(
             document=document, user=request.user, label=request.data.get("label", "")[:120]
         )
@@ -58,5 +60,9 @@ class VersionRestoreView(APIView):
     def post(self, request, document_id, version_id):
         document = _document(document_id)
         version = _version(document_id, version_id)
+        AccessService().require(user=request.user, document=document, minimum=Role.EDITOR)
+        # «Перед восстановлением» должно сохранить то, что на экране сейчас,
+        # а не то, что сервер получил минуту назад.
+        save_live_state(request, document)
         restored = VersionService().restore(user=request.user, document=document, version=version)
         return Response(VersionListSerializer(restored).data)

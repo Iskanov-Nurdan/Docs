@@ -250,6 +250,67 @@ export function seedBook(doc: Y.Doc, content: unknown): boolean {
   return true
 }
 
+/** Копия значения Yjs: вложенные карты и списки пересоздаются, остальное как есть. */
+function cloneY(value: unknown): unknown {
+  if (value instanceof Y.Map) {
+    const copy = new Y.Map<unknown>()
+    value.forEach((item, key) => copy.set(key, cloneY(item)))
+    return copy
+  }
+  if (value instanceof Y.Array) {
+    const copy = new Y.Array<unknown>()
+    copy.push(value.toArray().map(cloneY))
+    return copy
+  }
+  return value
+}
+
+/**
+ * Переписывает книгу содержимым сохранённой версии — обычной правкой.
+ *
+ * Раньше версию восстанавливал сервер, подменяя у себя состояние Yjs. Но у
+ * открытых вкладок и в их IndexedDB лежало более новое состояние: при
+ * синхронизации CRDT складывал оба, новое побеждало, и таблица оставалась как
+ * была. Здесь старые листы удаляются, а листы версии вставляются как новые —
+ * это движение вперёд, оно расходится всем участникам и отменяется Ctrl+Z.
+ *
+ * `state` — полное состояние Yjs версии: с ним возвращается и оформление,
+ * ширины, фильтры. Без него (старые версии) — только значения из `content`.
+ * Возвращает false, если восстанавливать не из чего.
+ */
+export function replaceBook(doc: Y.Doc, version: { state: Uint8Array | null; content: unknown }): boolean {
+  let sheets: SheetMap[] = []
+
+  if (version.state && version.state.length > 0) {
+    const source = new Y.Doc()
+    Y.applyUpdate(source, version.state)
+    sheets = book(source).toArray().map((sheet) => cloneY(sheet) as SheetMap)
+  }
+
+  if (sheets.length === 0) {
+    const content = version.content as { kind?: string; sheets?: Array<{ name?: string; cells?: Record<string, unknown> }> } | null
+    if (content?.kind !== 'sheet' || !Array.isArray(content.sheets)) return false
+    const scratch = new Y.Doc()
+    scratch.transact(() => {
+      for (const item of content.sheets ?? []) {
+        const sheet = makeSheet(String(item.name ?? 'Лист1').slice(0, 50))
+        book(scratch).push([sheet])
+        fillSheet(scratch, sheet, item.cells ?? {})
+      }
+    })
+    sheets = book(scratch).toArray().map((sheet) => cloneY(sheet) as SheetMap)
+  }
+
+  if (sheets.length === 0) return false
+  doc.transact(() => {
+    const target = book(doc)
+    target.delete(0, target.length)
+    target.push(sheets)
+  })
+  ensureBook(doc)
+  return true
+}
+
 /** Сохранённые ячейки {адрес: {value, display}} — в лист. */
 function fillSheet(doc: Y.Doc, sheet: SheetMap, source: Record<string, unknown>): void {
   const cells = cellsOf(sheet)

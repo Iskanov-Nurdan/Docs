@@ -4,7 +4,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,7 +14,7 @@ from apps.core.exceptions import BusinessError, NotFoundError
 from apps.core.permissions import IsAccountantOrAdmin
 from apps.core.services import client_ip
 from apps.documents.models import Document, DocumentActivity, Folder
-from apps.documents.repositories import DocumentRepository, FolderRepository
+from apps.documents.repositories import DocumentRepository, FolderRepository, is_uuid
 from apps.documents.serializers import (
     DocumentCreateSerializer,
     DocumentDetailSerializer,
@@ -67,6 +67,8 @@ class DocumentViewSet(viewsets.ViewSet):
 
         folder_id = request.query_params.get("folder")
         if folder_id:
+            if not is_uuid(folder_id):
+                raise BusinessError("Неверный идентификатор папки.", code="bad_folder")
             queryset = queryset.filter(folder_id=folder_id)
 
         ordering = request.query_params.get("ordering", "-last_edited_at")
@@ -104,7 +106,13 @@ class DocumentViewSet(viewsets.ViewSet):
         if template_id:
             from apps.doc_templates.models import DocumentTemplate
 
-            template = DocumentTemplate.objects.filter(id=template_id, is_active=True).first()
+            # Личная заготовка — только автору, как и в галерее шаблонов:
+            # иначе по идентификатору забирали бы чужой черновик целиком.
+            template = (
+                DocumentTemplate.objects.filter(id=template_id, is_active=True)
+                .filter(Q(is_personal=False) | Q(created_by=request.user))
+                .first()
+            )
             if template is None:
                 raise BusinessError("Шаблон не найден.", code="template_not_found")
             document = service.create_from_template(user=request.user, template=template,

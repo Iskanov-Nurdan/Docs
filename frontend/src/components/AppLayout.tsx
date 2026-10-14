@@ -124,9 +124,25 @@ export function AppLayout({ title, actions, children }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Отметка в ref, а не только в состоянии: второй клик двойного нажатия
+  // приходит раньше перерисовки и создавал вторую пустую таблицу.
+  const creatingRef = useRef(false)
+  const [creating, setCreating] = useState(false)
+
   const createDocument = async () => {
-    const document = await api.createDocument({ title: 'Новая таблица' })
-    navigate(`/documents/${document.id}`)
+    if (creatingRef.current) return
+    creatingRef.current = true
+    setCreating(true)
+    setImportError('')
+    try {
+      const document = await api.createDocument({ title: 'Новая таблица' })
+      navigate(`/documents/${document.id}`)
+    } catch (error) {
+      setImportError(error instanceof ApiError ? error.message : 'Не удалось создать таблицу')
+    } finally {
+      creatingRef.current = false
+      setCreating(false)
+    }
   }
 
   const importDocument = async (file: File) => {
@@ -249,8 +265,9 @@ export function AppLayout({ title, actions, children }: Props) {
           <button
             type="button"
             onClick={() => void createDocument()}
+            disabled={creating}
             aria-label={importing ? 'Открываем таблицу…' : 'Создать таблицу'}
-            className="flex h-10 items-center gap-1.5 rounded-full bg-accent px-2 text-sm font-medium text-white hover:opacity-90 sm:px-4"
+            className="flex h-10 items-center gap-1.5 rounded-full bg-accent px-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60 sm:px-4"
           >
             <PlusIcon size={16} />
             <span className="hidden sm:inline">{importing ? 'Открываем…' : 'Создать таблицу'}</span>

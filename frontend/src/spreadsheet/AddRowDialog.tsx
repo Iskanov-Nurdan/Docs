@@ -196,11 +196,18 @@ export function AddRowDialog({ doc, sheet, version, cols, rate, onAdded, onClose
     if (hours === null) return null
 
     const departureField = fields.find((item) => item.kind === 'departure')
-    const moment = parseDeadline(departureField ? (values[departureField.col] ?? '') : '')
+    const given = parseDeadline(departureField ? (values[departureField.col] ?? '') : '')
       ?? parseDeadline(dateValue(fields, values))
-    if (!moment) return null
+    // Ни даты, ни времени выезда — машина выходит сейчас, как и в самой
+    // таблице (fillArrival). Раньше форма в этом случае срок не ставила
+    // вовсе, хотя таблица для той же строки его считала.
+    const moment = given ?? new Date()
 
-    return { text: formatMoment(new Date(moment.getTime() + hours * 3600 * 1000)), hours }
+    return {
+      text: formatMoment(new Date(moment.getTime() + hours * 3600 * 1000)),
+      hours,
+      fromNow: !given,
+    }
   }, [routeCols, values, waypoints, fields, legs])
 
   const submit = (event: React.FormEvent) => {
@@ -353,6 +360,7 @@ export function AddRowDialog({ doc, sheet, version, cols, rate, onAdded, onClose
             {!(values[routeCols.arrive.col] ?? '').trim() && plannedArrival && (
               <span className="ml-1 text-accent">
                 — посчитаем: {plannedArrival.text}
+                {plannedArrival.fromNow && ' (от текущего времени)'}
               </span>
             )}
           </span>

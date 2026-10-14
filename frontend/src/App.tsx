@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from '@/store/auth'
 import { LoginPage } from '@/pages/Login'
 import { ForgotPasswordPage } from '@/pages/ForgotPassword'
@@ -31,11 +31,14 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 /** Пускает дальше только вошедших. */
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, initialized } = useAuth()
+  const location = useLocation()
 
   // Пока сессия восстанавливается, нельзя ни пускать, ни выбрасывать:
   // иначе обновление страницы выкидывало бы на форму входа.
   if (!initialized) return <p className="p-12 text-center text-ink-muted">Загрузка…</p>
-  if (!user) return <Navigate to="/login" replace />
+  // Куда шли — запоминаем: после входа по ссылке на таблицу человек
+  // должен попасть в неё, а не в общий список.
+  if (!user) return <Navigate to="/login" replace state={{ from: location }} />
   return <>{children}</>
 }
 

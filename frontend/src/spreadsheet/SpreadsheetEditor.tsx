@@ -11,7 +11,7 @@ import { ApiError, api, tokens } from '@/api'
 import { CloseIcon, UploadIcon } from '@/components/icons'
 import { SHEET_FILE_ACCEPT, isSheetFile } from '@/utils/files'
 import { DocumentProvider } from '@/websocket/provider'
-import type { Document, EditorMode, Presence, SaveStatus } from '@/types'
+import type { Document, EditorMode, LiveSnapshot, Presence, SaveStatus, VersionDetail } from '@/types'
 import { Grid } from './Grid'
 import { SheetFind } from './SheetFind'
 import { TransferDialog } from './TransferDialog'
@@ -70,6 +70,7 @@ import {
   setFrozen,
   sheetAt,
   sheetList,
+  replaceBook,
   shiftFormula,
   writeCell,
 } from './model'
@@ -92,6 +93,12 @@ type Props = {
   onStatusChange: (status: SaveStatus) => void
   onPresenceChange: (users: Presence[]) => void
   onEvent?: (event: Record<string, unknown>) => void
+  /** Версия из истории, которую нужно записать поверх таблицы. */
+  restoreRequest?: VersionDetail | null
+  /** Версия записана — окно истории можно забыть. */
+  onRestoreApplied?: () => void
+  /** Сюда редактор кладёт функцию «что на экране» — для сохранения версии. */
+  snapshotRef?: React.MutableRefObject<(() => LiveSnapshot | null) | null>
 }
 
 export function SpreadsheetEditor(props: Props) {
@@ -199,7 +206,9 @@ export function SpreadsheetEditor(props: Props) {
   return <Workbook {...props} provider={provider} />
 }
 
-function Workbook({ document: source, mode, provider, user }: Props & { provider: DocumentProvider }) {
+function Workbook({
+  document: source, mode, provider, user, restoreRequest, onRestoreApplied, snapshotRef,
+}: Props & { provider: DocumentProvider }) {
   const doc = provider.doc
   const editable = mode === 'editing'
 
@@ -278,6 +287,45 @@ function Workbook({ document: source, mode, provider, user }: Props & { provider
   const focusStyle: CellStyle = sheet
     ? readStyle(sheet, selection.focus.row, selection.focus.col)
     : {}
+
+  // Что на экране — для версии «как сейчас», без минутного отставания снимка.
+  useEffect(() => {
+    if (!snapshotRef) return
+    snapshotRef.current = () => {
+      const state = Y.encodeStateAsUpdate(doc)
+      let binary = ''
+      state.forEach((byte) => {
+        binary += String.fromCharCode(byte)
+      })
+      return { content: serializeBook(doc), state: window.btoa(binary) }
+    }
+    return () => {
+      snapshotRef.current = null
+    }
+  }, [doc, snapshotRef])
+
+  // Восстановление версии из истории — правкой в этой книге, а не на сервере:
+  // так оно доходит до всех открытых вкладок и не отменяется их более новым
+  // состоянием (см. replaceBook).
+  useEffect(() => {
+    if (!restoreRequest) return
+    const state = restoreRequest.ydoc_state
+      ? Uint8Array.from(window.atob(restoreRequest.ydoc_state), (char) => char.charCodeAt(0))
+      : null
+    const done = replaceBook(doc, { state, content: restoreRequest.content })
+    if (done) {
+      setActive(0)
+      setSelection(cellAt(0, 0))
+      provider.flush()
+      setArrival(`Восстановлена версия ${restoreRequest.version_number}. Отменить — Ctrl+Z.`)
+    } else {
+      setArrival('В этой версии нет таблицы — восстанавливать нечего.')
+    }
+    window.setTimeout(() => setArrival(''), 7000)
+    onRestoreApplied?.()
+    // Запрос обрабатывается один раз — по самому объекту версии.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreRequest])
 
   // Пока строку формул не трогали, в ней показывается содержимое ячейки.
   useEffect(() => setFormulaDraft(null), [selection.focus.row, selection.focus.col, index])

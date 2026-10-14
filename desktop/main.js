@@ -118,6 +118,22 @@ function createWindow() {
     },
   })
 
+  // Размер задаём уже созданному окну и сверяем результат: на Windows
+  // с масштабом экрана (125%) пересчёт в пиксели округляется вверх, и окно
+  // подрастало с каждым запуском — конструктор на 5 пикселей, setBounds на 1–2.
+  // Одна поправка на замеренную разницу возвращает ровно сохранённый размер.
+  if (Number.isFinite(state.x) && Number.isFinite(state.y)) {
+    const wanted = { x: state.x, y: state.y, width: state.width, height: state.height }
+    mainWindow.setBounds(wanted)
+    const got = mainWindow.getBounds()
+    if (got.width !== wanted.width || got.height !== wanted.height) {
+      mainWindow.setBounds({
+        ...wanted,
+        width: wanted.width - (got.width - wanted.width),
+        height: wanted.height - (got.height - wanted.height),
+      })
+    }
+  }
   if (state.maximized) mainWindow.maximize()
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   mainWindow.on('close', () => mainWindow && saveWindowState(mainWindow))

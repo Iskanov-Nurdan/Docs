@@ -9,24 +9,36 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '@/api'
 import { formatDateTime } from '@/utils/date'
 import { SheetSnapshotView, isSheetContent } from '@/spreadsheet/SheetSnapshotView'
-import type { Role, Version } from '@/types'
+import { InputDialog } from '@/components/InputDialog'
+import type { LiveSnapshot, Role, Version, VersionDetail } from '@/types'
 
 type Props = {
   documentId: string
   role: Role | null
   onClose: () => void
-  /** Восстановление меняет документ — страница должна перечитать его. */
-  onRestored: () => void
+  /**
+   * Версию выбрали для восстановления. Переписывает таблицу редактор — см.
+   * replaceBook: сервер это сделать не может, у открытых вкладок состояние
+   * новее, и CRDT отменил бы откат.
+   */
+  onRestored: (version: VersionDetail) => void
+  /** Состояние таблицы на экране — версия сохраняется «как сейчас». */
+  getSnapshot?: () => LiveSnapshot | null
 }
 
-export function VersionHistory({ documentId, role, onClose, onRestored }: Props) {
+export function VersionHistory({ documentId, role, onClose, onRestored, getSnapshot }: Props) {
   const [versions, setVersions] = useState<Version[]>([])
   const [selected, setSelected] = useState<Version | null>(null)
   const [content, setContent] = useState<unknown>(null)
+  const [detail, setDetail] = useState<VersionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingContent, setLoadingContent] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Окно «Название версии». Своё, а не window.prompt: в приложении для
+  // компьютера (Electron) prompt не показывается вовсе и возвращает null —
+  // и «Сохранить текущую» там молча ничего не делала.
+  const [naming, setNaming] = useState(false)
 
   const canRestore = role === 'owner' || role === 'editor'
 
@@ -52,11 +64,12 @@ export function VersionHistory({ documentId, role, onClose, onRestored }: Props)
   // с клавиатуры.
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      // Escape в окне «Название версии» закрывает только его, не историю.
+      if (event.key === 'Escape' && !naming) onClose()
     }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
-  }, [onClose])
+  }, [onClose, naming])
 
   useEffect(() => {
     if (!selected) return
@@ -67,7 +80,10 @@ export function VersionHistory({ documentId, role, onClose, onRestored }: Props)
     api
       .getVersion(documentId, selected.id)
       .then((version) => {
-        if (!cancelled) setContent(version.content)
+        if (!cancelled) {
+          setContent(version.content)
+          setDetail(version)
+        }
       })
       .catch(() => {
         if (!cancelled) setError('Не удалось открыть версию')
@@ -81,12 +97,10 @@ export function VersionHistory({ documentId, role, onClose, onRestored }: Props)
     }
   }, [documentId, selected])
 
-  const saveCurrent = async () => {
+  const saveCurrent = async (label: string) => {
     setBusy(true)
     try {
-      const label = window.prompt('Название версии', '')
-      if (label === null) return
-      await api.saveVersion(documentId, label)
+      await api.saveVersion(documentId, label, getSnapshot?.())
       await load()
     } catch (problem) {
       setError(problem instanceof ApiError ? problem.message : 'Не удалось сохранить версию')
@@ -106,8 +120,9 @@ export function VersionHistory({ documentId, role, onClose, onRestored }: Props)
 
     setBusy(true)
     try {
-      await api.restoreVersion(documentId, selected.id)
-      onRestored()
+      await api.restoreVersion(documentId, selected.id, getSnapshot?.())
+      const version = detail?.id === selected.id ? detail : await api.getVersion(documentId, selected.id)
+      onRestored(version)
     } catch (problem) {
       setError(problem instanceof ApiError ? problem.message : 'Не удалось восстановить версию')
     } finally {
@@ -116,14 +131,32 @@ export function VersionHistory({ documentId, role, onClose, onRestored }: Props)
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-surface">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="История версий"
+      className="fixed inset-0 z-50 flex flex-col bg-surface"
+    >
+      {naming && (
+        <InputDialog
+          title="Сохранить версию"
+          label="Название версии"
+          initialValue={`Версия от ${new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
+          onSubmit={async (label) => {
+            setNaming(false)
+            await saveCurrent(label)
+          }}
+          onClose={() => setNaming(false)}
+        />
+      )}
+
       <header className="flex items-center gap-3 border-b border-hairline px-4 py-3">
         <h2 className="flex-1 text-base font-semibold text-ink">История версий</h2>
 
         {canRestore && (
           <button
             type="button"
-            onClick={saveCurrent}
+            onClick={() => setNaming(true)}
             disabled={busy}
             className="rounded border border-hairline px-3 py-1.5 text-sm hover:bg-surface-muted disabled:opacity-40"
           >

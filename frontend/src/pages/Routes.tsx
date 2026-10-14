@@ -187,7 +187,7 @@ export function RoutesPage() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-        <section>
+        <section className="min-w-0">
           <h2 className="mb-2 text-sm font-semibold text-ink">Точки ({places.length})</h2>
 
           {canEdit && (
@@ -196,10 +196,12 @@ export function RoutesPage() {
                 value={placeName}
                 onChange={(event) => setPlaceName(event.target.value)}
                 placeholder="Например, Кашгар"
+                aria-label="Название точки"
                 className={FIELD}
               />
               <button
                 type="submit"
+                aria-label="Добавить точку"
                 className="flex shrink-0 items-center gap-1 rounded-full bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90"
               >
                 <PlusIcon size={16} />
@@ -281,7 +283,7 @@ export function RoutesPage() {
           </ul>
         </section>
 
-        <section>
+        <section className="min-w-0">
           <h2 className="mb-2 text-sm font-semibold text-ink">Время в пути ({legs.length})</h2>
 
           {canEdit && places.length > 1 && (

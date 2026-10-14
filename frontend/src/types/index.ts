@@ -227,6 +227,20 @@ export type Version = {
   created_at: string
 }
 
+/**
+ * Что открыто в редакторе прямо сейчас: снимок для сервера и состояние Yjs
+ * в base64. Сервер получает его от вкладки раз в минуту, а версия должна
+ * сохраняться «как на экране».
+ */
+export type LiveSnapshot = { content: unknown; state: string }
+
+/** Версия целиком: содержимое для просмотра и состояние Yjs для восстановления. */
+export type VersionDetail = Version & {
+  content: unknown
+  /** Состояние Yjs в base64. null — версия старая, есть только значения. */
+  ydoc_state: string | null
+}
+
 export type Template = {
   id: string
   title: string
