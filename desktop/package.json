@@ -1,7 +1,7 @@
 {
   "name": "alitrade-desktop",
   "productName": "ALI trade",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "ALI trade для Windows и macOS: журнал рейсов и таблицы в отдельном окне",
   "author": "ALI trade",
   "private": true,
