@@ -150,19 +150,20 @@ export function RoutesPage() {
     }
   }
 
+  // Ошибка не глотается: окно подтверждения остаётся открытым и показывает,
+  // почему не вышло. Раньше оно закрывалось, а под ним мелькало «Не удалось
+  // удалить» без причины — и было не понять, удалилось или нет.
   const remove = async () => {
     if (!removing) return
     try {
       if (removing.kind === 'place') await api.deletePlace(removing.item.id)
       else if (removing.kind === 'transit') await api.deleteTransitAmount(removing.item.id)
       else await api.deleteRouteLeg(removing.item.id)
-      await load(true)
-      say('Удалено')
-    } catch {
-      say('Не удалось удалить')
-    } finally {
-      setRemoving(null)
+    } catch (err) {
+      throw new Error(explain(err, 'Не удалось удалить: нет связи с сервером'))
     }
+    await load(true)
+    say('Удалено')
   }
 
   return (
@@ -183,6 +184,14 @@ export function RoutesPage() {
       {error && (
         <p role="alert" className="mb-4 text-sm text-red-600">
           {error}
+        </p>
+      )}
+
+      {/* Кнопок удаления у обычного пользователя нет — говорим почему, иначе
+          кажется, что удаление просто сломано. */}
+      {!canEdit && (
+        <p className="mb-4 text-sm text-ink-muted">
+          Добавлять и удалять точки и маршруты может администратор.
         </p>
       )}
 

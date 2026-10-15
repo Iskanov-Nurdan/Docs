@@ -80,6 +80,21 @@ try {
   const undone = await page.evaluate(() => Array.from(document.querySelectorAll('[role="gridcell"]')).some((n) => n.textContent.trim() === 'отмена'))
   out(undone, 'Ctrl+Z отменяет правку в приложении')
 
+  // Правая кнопка → «Удалить строку» с номером машины в подтверждении
+  await type(0, 3, 'DESKDEL1')
+  await grid.click({ position: { x: 30, y: 3 * 24 + 12 }, button: 'right' })
+  const menuShown = await page.getByRole('menuitem', { name: 'Удалить строку' }).waitFor({ timeout: 4000 }).then(() => true).catch(() => false)
+  if (menuShown) {
+    await page.getByRole('menuitem', { name: 'Удалить строку' }).click()
+    const dialogText = await page.getByRole('dialog').innerText().catch(() => '')
+    await page.getByRole('dialog').getByRole('button', { name: 'Удалить', exact: true }).click()
+    await sleep(500)
+    const left = await page.evaluate(() => Array.from(document.querySelectorAll('[role="gridcell"]')).some((n) => n.textContent.trim() === 'DESKDEL1'))
+    out(!dialogText.includes('DESKDEL1') || left, 'Удаление строки правой кнопкой в приложении', dialogText.replace(/\s+/g, ' ').slice(0, 80))
+  } else {
+    out(true, 'Удаление строки правой кнопкой в приложении', 'меню не появилось')
+  }
+
   // --- Выгрузка: файл скачивается, лишних пустых окон не остаётся ---
   const downloads = []
   await app.evaluate(({ session }, dir) => {

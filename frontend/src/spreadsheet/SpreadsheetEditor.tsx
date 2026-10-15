@@ -5,14 +5,16 @@
  * документа: книга живёт в общем документе Yjs, поэтому совместная правка,
  * работа без сети и восстановление версий достались ей даром.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { ApiError, api, tokens } from '@/api'
-import { CloseIcon, UploadIcon } from '@/components/icons'
+import { CloseIcon, EraserIcon, RowIcon, TrashIcon, UploadIcon } from '@/components/icons'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { SHEET_FILE_ACCEPT, isSheetFile } from '@/utils/files'
 import { DocumentProvider } from '@/websocket/provider'
 import type { Document, EditorMode, LiveSnapshot, Presence, SaveStatus, VersionDetail } from '@/types'
 import { Grid } from './Grid'
+import { RowMenu } from './RowMenu'
 import { SheetFind } from './SheetFind'
 import { TransferDialog } from './TransferDialog'
 import {
@@ -43,8 +45,10 @@ import {
   addSheet,
   clearCells,
   colCount,
+  columnsWithFilter,
+  deleteRows,
+  hiddenRows,
   deleteCol,
-  deleteRow,
   ensureBook,
   growCols,
   isBookEmpty,
@@ -242,6 +246,10 @@ function Workbook({
     loadRate()
   }, [loadRate])
   const [matches, setMatches] = useState<CellHit[]>([])
+  // Меню по правой кнопке и строки, ждущие подтверждения удаления.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+  const closeMenu = useCallback(() => setMenuAt(null), [])
+  const [removing, setRemoving] = useState<{ rows: number[]; message: string } | null>(null)
 
   // Ctrl/⌘+F ловим на всей странице, а не только внутри таблицы: пока фокус на
   // теле страницы (после загрузки он там), Safari открывал свой поиск, а он
@@ -503,6 +511,47 @@ function Workbook({
   const rect = bounds(selection)
 
   /**
+   * Строки выделения, которые удалятся. Скрытые фильтром — нет: человек
+   * выделил «с 5-й по 9-ю» среди видимых, а между ними могли стоять десятки
+   * спрятанных рейсов, и они пропали бы молча.
+   */
+  const rowsToRemove = (): number[] => {
+    const last = Math.min(rect.bottom, rowCount(sheet) - 1)
+    const hidden = columnsWithFilter(sheet).length > 0
+      ? hiddenRows(sheet, displayAt, Math.min(lastFilledRow(sheet), last))
+      : null
+    const list: number[] = []
+    for (let row = rect.top; row <= last; row += 1) {
+      if (!hidden?.has(row)) list.push(row)
+    }
+    return list
+  }
+
+  /** Подтверждение с номерами машин: удаляют рейс, а не «строку 37». */
+  const askRemoveRows = () => {
+    if (!editable) return
+    const list = rowsToRemove()
+    if (list.length === 0) return
+    if (list.length >= rowCount(sheet)) {
+      setArrival('Все строки листа удалить нельзя — удалите лист целиком на вкладке внизу.')
+      window.setTimeout(() => setArrival(''), 6000)
+      return
+    }
+    const plateCol = findColumn(sheet, VEHICLE_COLUMNS)
+    const names = list.map((row) => {
+      const plate = plateCol === null || row === 0 ? '' : displayAt(row, plateCol).trim()
+      return plate ? `${row + 1} (${plate})` : String(row + 1)
+    })
+    const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? ` и ещё ${names.length - 5}` : '')
+    const header = list.includes(0) && plateCol !== null ? ' Среди них шапка таблицы.' : ''
+    setRemoving({
+      rows: list,
+      message: (list.length === 1 ? `Строка ${shown} будет удалена.` : `Строки ${shown} будут удалены.`)
+        + `${header} Вернуть можно кнопкой «Отменить» (Ctrl+Z).`,
+    })
+  }
+
+  /**
    * Отметка «Прибыл»: сперва точки по пути по одной, потом прибытие.
    * Её вызывают и кнопка на панели, и кнопка в полосе маршрута.
    */
@@ -642,7 +691,7 @@ function Workbook({
         onUndo={() => undoManager?.undo()}
         onRedo={() => undoManager?.redo()}
         onInsertRow={() => editable && insertRow(doc, sheet, rect.top)}
-        onDeleteRow={() => editable && deleteRow(doc, sheet, rect.top)}
+        onDeleteRow={askRemoveRows}
         onInsertCol={() => editable && insertCol(doc, sheet, rect.left)}
         onDeleteCol={() => editable && deleteCol(doc, sheet, rect.left)}
         onFill={(value) => {
@@ -903,7 +952,57 @@ function Workbook({
         onPaste={handlePaste}
         editRequest={editRequest}
         matches={matches}
+        onContextMenu={(x, y) => setMenuAt({ x, y })}
       />
+
+      {menuAt && (
+        <RowMenu
+          x={menuAt.x}
+          y={menuAt.y}
+          onClose={closeMenu}
+          items={[
+            {
+              label: 'Вставить строку выше',
+              icon: <RowIcon size={16} />,
+              disabled: !editable,
+              onSelect: () => insertRow(doc, sheet, rect.top),
+            },
+            {
+              label: 'Вставить строку ниже',
+              icon: <RowIcon size={16} />,
+              disabled: !editable,
+              onSelect: () => insertRow(doc, sheet, rect.bottom + 1),
+            },
+            {
+              label: 'Очистить ячейки',
+              icon: <EraserIcon size={16} />,
+              disabled: !editable,
+              onSelect: () => clearCells(doc, sheet, cellsOfSelection(selection)),
+            },
+            {
+              label: rect.bottom > rect.top ? `Удалить строки (${rect.bottom - rect.top + 1})` : 'Удалить строку',
+              icon: <TrashIcon size={16} />,
+              danger: true,
+              disabled: !editable,
+              onSelect: askRemoveRows,
+            },
+          ]}
+        />
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={removing.rows.length === 1 ? 'Удалить строку?' : `Удалить строки (${removing.rows.length})?`}
+          message={removing.message}
+          confirmLabel="Удалить"
+          danger
+          onConfirm={() => {
+            deleteRows(doc, sheet, removing.rows)
+            setSelection(cellAt(Math.min(removing.rows[0], rowCount(sheet) - 1), rect.left))
+          }}
+          onClose={() => setRemoving(null)}
+        />
+      )}
 
       <SheetTabs
         sheets={sheets}

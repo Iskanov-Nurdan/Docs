@@ -1024,6 +1024,19 @@ export function deleteRow(doc: Y.Doc, sheet: SheetMap, at: number): void {
 }
 
 /**
+ * Удаляет несколько строк одной правкой: Ctrl+Z возвращает их все разом.
+ *
+ * Снизу вверх — иначе после первого удаления номера остальных съезжали бы,
+ * и удалялась бы соседняя машина вместо выбранной.
+ */
+export function deleteRows(doc: Y.Doc, sheet: SheetMap, indices: number[]): void {
+  const order = Array.from(new Set(indices.map((index) => Math.trunc(index)))).sort((a, b) => b - a)
+  doc.transact(() => {
+    for (const index of order) deleteRow(doc, sheet, index)
+  })
+}
+
+/**
  * Последняя строка, в которой хоть что-то есть. -1 — лист пуст.
  *
  * Нужна форме добавления: новая запись идёт следом за последней, а не в первую

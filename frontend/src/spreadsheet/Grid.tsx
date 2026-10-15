@@ -59,6 +59,8 @@ type Props = {
   editRequest: number
   /** Ячейки, найденные поиском по листу: подсвечиваются все сразу. */
   matches?: { row: number; col: number }[]
+  /** Правая кнопка по ячейке или номеру строки: меню действий со строкой. */
+  onContextMenu?: (x: number, y: number) => void
 }
 
 /** Пустой набор скрытых строк — общий, чтобы не плодить объекты. */
@@ -148,6 +150,7 @@ export function Grid({
   onPaste,
   editRequest,
   matches,
+  onContextMenu,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const colStripRef = useRef<HTMLDivElement>(null)
@@ -689,6 +692,26 @@ export function Grid({
     if (cell) onSelectionChange({ anchor: selection.anchor, focus: cell })
   }
 
+  /**
+   * Правая кнопка: ячейка вне выделения становится выделенной — как в Excel,
+   * меню всегда про то, что видно выделенным.
+   */
+  const handleContextMenu = (event: React.MouseEvent, rowOnly?: number) => {
+    if (!onContextMenu) return
+    event.preventDefault()
+    if (editing) finishEditing()
+    if (rowOnly !== undefined) {
+      if (!(selection.anchor.row <= rowOnly && rowOnly <= selection.focus.row)
+        && !(selection.focus.row <= rowOnly && rowOnly <= selection.anchor.row)) {
+        onSelectionChange({ anchor: { row: rowOnly, col: 0 }, focus: { row: rowOnly, col: cols - 1 } })
+      }
+    } else {
+      const cell = cellFromPoint(event.clientX, event.clientY)
+      if (cell && !contains(selection, cell.row, cell.col)) onSelectionChange(cellAt(cell.row, cell.col))
+    }
+    onContextMenu(event.clientX, event.clientY)
+  }
+
   const stopDragging = () => {
     dragging.current = false
   }
@@ -846,6 +869,7 @@ export function Grid({
                 onClick={() =>
                   onSelectionChange({ anchor: { row, col: 0 }, focus: { row, col: cols - 1 } })
                 }
+                onContextMenu={(event) => handleContextMenu(event, row)}
               >
                 {row + 1}
               </div>
@@ -868,6 +892,7 @@ export function Grid({
           onPointerUp={stopDragging}
           onPointerLeave={stopDragging}
           onDoubleClick={handleDoubleClick}
+          onContextMenu={(event) => handleContextMenu(event)}
           onCopy={handleCopy}
           onCut={handleCut}
           onPaste={handlePaste}
@@ -883,7 +908,10 @@ export function Grid({
                 const selected = contains(selection, row, col)
                 const isFocus = selection.focus.row === row && selection.focus.col === col
                 const found = matchKeys.has(`${row}:${col}`)
-                const inFoundRow = matchRows.has(row)
+                // Целиком желтеет только строка, на которой стоит поиск.
+                // Раньше желтела каждая строка с совпадением: поиск «Ташкент»
+                // красил пол-листа, и после него таблица выглядела пёстрой.
+                const inFoundRow = row === selection.focus.row && matchRows.has(row)
                 const numeric = typeof value === 'number'
                 // Цвет по смыслу: сначала слово, потом срок. Ручная заливка
                 // сильнее обоих — её выбрал человек.

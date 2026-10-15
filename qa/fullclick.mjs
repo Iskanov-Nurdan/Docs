@@ -186,7 +186,8 @@ const main = async () => {
   })
   await check(page, 'Удалить строку', async () => {
     await select(page, 0, 2)
-    await tool(page, 'Удалить строку').click(); await sleep(400)
+    await tool(page, 'Удалить строку').click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Удалить', exact: true }).click(); await sleep(400)
     return { bug: (await cell(page, 0, 2)) !== 'BBB', detail: await cell(page, 0, 2) }
   })
   await check(page, 'Вставить столбец слева', async () => {
