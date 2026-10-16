@@ -834,10 +834,9 @@ function Workbook({
               setTransferring(null)
               setSelection(cellAt(result.row, 0))
               setArrival(
-                `Груз ${result.cargoId} перегружен на ${value.vehicle.trim()} в ${value.place.trim()}.`
-                + ` Новая строка ${result.row + 1}`
-                + (result.arrival ? `, прибытие ${result.arrival}` : '')
-                + (result.created ? '. Номер груза заведён в колонке «Груз №».' : '.'),
+                `Строка ${result.row + 1}: груз перегружен на ${value.vehicle.trim()}`
+                + ` в ${value.place.trim()}`
+                + (result.arrival ? `, прибытие ${result.arrival}.` : '.'),
               )
               window.setTimeout(() => setArrival(''), 9000)
               return null

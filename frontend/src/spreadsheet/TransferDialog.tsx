@@ -55,9 +55,9 @@ export function TransferDialog({
     <Modal title="Перегруз на другую машину" onClose={onClose} width="sm">
       <form onSubmit={submit}>
         <p className="mb-4 text-sm text-ink-muted">
-          {vehicle ? `Машина ${vehicle}` : 'Эта машина'} закончит путь в месте перегруза
-          и получит статус «Перегружен». Груз поедет дальше в {destination} новой строкой
-          с тем же номером груза. Стоимость и налог останутся в первой строке.
+          Новая машина встанет в эту же строку вместо {vehicle || 'старой'} — новая строка
+          не добавится. Груз поедет дальше в {destination}, а старая машина и место
+          перегруза запишутся в примечание.
         </p>
 
         <datalist id="transfer-places">
